@@ -1,0 +1,8 @@
+[gd_resource type="Resource" script_class="IngredientData" load_steps=2 format=3]
+[ext_resource type="Script" path="res://scripts/data/ingredient_data.gd" id="1"]
+[resource]
+script = ExtResource("1")
+id = "olio"
+display_name = "Olio EVO"
+color = Color(0.72, 0.60, 0.18, 1)
+rarity = 2

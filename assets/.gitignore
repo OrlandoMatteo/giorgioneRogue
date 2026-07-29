@@ -1,0 +1,6 @@
+.godot/
+android/build/
+*.apk
+*.aab
+**/*.pem
+android/*

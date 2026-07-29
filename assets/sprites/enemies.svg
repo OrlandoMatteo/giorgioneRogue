@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="128" viewBox="0 0 160 32" shape-rendering="crispEdges">
+ <rect width="160" height="32" fill="#ff00ff"/>
+ <g transform="translate(0)"><path fill="#4a281d" d="M4 12h20v13H4z"/><path fill="#4a281d" d="M20 8h9v13h-9z"/><path fill="#f4e8c3" d="M26 17h5v3h-5z"/><text x="16" y="30" font-size="4" text-anchor="middle" fill="#fff">BOAR</text></g>
+ <g transform="translate(32)"><path fill="#fff7df" d="M5 12h18v13H5z"/><path fill="#fff7df" d="M18 5h8v12h-8z"/><path fill="#e8a534" d="M25 9h5v4h-5z"/><text x="16" y="30" font-size="4" text-anchor="middle" fill="#fff">GOOSE</text></g>
+ <g transform="translate(64)"><path fill="#2f6d9c" d="M7 13h18v13H7z"/><path fill="#d98c61" d="M9 5h14v10H9z"/><path fill="#e5d6b0" d="M5 2h22v5H5z"/><text x="16" y="30" font-size="4" text-anchor="middle" fill="#fff">TOURIST</text></g>
+ <g transform="translate(96)"><path fill="#241811" d="M7 12h18v14H7z"/><path fill="#d9b37a" d="M10 5h12v9H10z"/><path fill="#3d2a1e" d="M5 2h22v4H5z"/><text x="16" y="30" font-size="4" text-anchor="middle" fill="#fff">THIEF</text></g>
+ <g transform="translate(128)"><path fill="#f4f0dc" d="M4 12h24v15H4z"/><path fill="#d98c61" d="M8 4h16v10H8z"/><path fill="#4e5d65" d="M3 1h26v5H3z"/><text x="16" y="30" font-size="4" text-anchor="middle" fill="#fff">INSPECTOR</text></g>
+</svg>

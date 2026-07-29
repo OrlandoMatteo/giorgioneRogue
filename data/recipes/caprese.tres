@@ -1,0 +1,9 @@
+[gd_resource type="Resource" script_class="RecipeData" load_steps=2 format=3]
+[ext_resource type="Script" path="res://scripts/data/recipe_data.gd" id="1"]
+[resource]
+script = ExtResource("1")
+id = "caprese"
+display_name = "Caprese Solare"
+description = "Aura di basilico: cura lentamente e allontana la fame."
+ingredient_ids = ["pomodoro", "mozzarella", "olio"]
+accent = Color(0.2, 0.71, 0.25, 1)

@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="EnemyData" load_steps=2 format=3]
+[ext_resource type="Script" path="res://scripts/data/enemy_data.gd" id="1"]
+[resource]
+script = ExtResource("1")
+id = "ispettore"
+display_name = "Ispettore Sanitario"
+max_health = 230.0
+speed = 45.0
+contact_damage = 16.0
+radius = 34.0
+accent = Color(0.82, 0.75, 0.55, 1)
+drops = ["guanciale", "olio"]

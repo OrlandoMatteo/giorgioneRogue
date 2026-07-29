@@ -1,0 +1,9 @@
+[gd_resource type="Resource" script_class="RecipeData" load_steps=2 format=3]
+[ext_resource type="Script" path="res://scripts/data/recipe_data.gd" id="1"]
+[resource]
+script = ExtResource("1")
+id = "porchetta"
+display_name = "Giro di Porchetta"
+description = "Una ruota arrosto gira attorno al cuoco e trita i guastafeste."
+ingredient_ids = ["guanciale", "olio", "erbe"]
+accent = Color(0.84, 0.32, 0.17, 1)

@@ -1,0 +1,9 @@
+[gd_resource type="Resource" script_class="RecipeData" load_steps=2 format=3]
+[ext_resource type="Script" path="res://scripts/data/recipe_data.gd" id="1"]
+[resource]
+script = ExtResource("1")
+id = "tagliatelle"
+display_name = "Tagliatelle ai Funghi"
+description = "+25% velocità e una scia di burro che scotta i nemici."
+ingredient_ids = ["guanciale", "olio", "farina"]
+accent = Color(0.94, 0.66, 0.19, 1)

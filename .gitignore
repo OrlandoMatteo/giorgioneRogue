@@ -1,0 +1,27 @@
+# Godot editor cache and generated imports.
+/.godot/
+
+# Generated Android build template and install packages.
+/android/build/
+/android/.build_version
+/*.apk
+/*.apk.idsig
+/*.aab
+
+# Legacy/local Web exports. GitHub Pages is published only from /docs.
+/web/
+/Giorgione's Feast.*
+
+# Local TLS certificates and private keys must never be committed.
+*.pem
+*.key
+*-key.pem
+
+# Python, IDE and operating-system noise.
+__pycache__/
+*.py[cod]
+/.vscode/
+/.idea/
+.DS_Store
+Thumbs.db
+

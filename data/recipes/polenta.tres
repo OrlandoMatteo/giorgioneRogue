@@ -1,0 +1,9 @@
+[gd_resource type="Resource" script_class="RecipeData" load_steps=2 format=3]
+[ext_resource type="Script" path="res://scripts/data/recipe_data.gd" id="1"]
+[resource]
+script = ExtResource("1")
+id = "polenta"
+display_name = "Cannone di Polenta"
+description = "Il mestolo spara polenta calda, più grande e più esplosiva."
+ingredient_ids = ["guanciale", "olio", "formaggio"]
+accent = Color(1, 0.71, 0.14, 1)

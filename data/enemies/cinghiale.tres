@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="EnemyData" load_steps=2 format=3]
+[ext_resource type="Script" path="res://scripts/data/enemy_data.gd" id="1"]
+[resource]
+script = ExtResource("1")
+id = "cinghiale"
+display_name = "Cinghiale Affamato"
+max_health = 32.0
+speed = 62.0
+contact_damage = 8.0
+radius = 23.0
+accent = Color(0.28, 0.15, 0.1, 1)
+drops = ["guanciale", "olio"]

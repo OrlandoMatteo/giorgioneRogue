@@ -1,0 +1,8 @@
+[gd_resource type="Resource" script_class="IngredientData" load_steps=2 format=3]
+[ext_resource type="Script" path="res://scripts/data/ingredient_data.gd" id="1"]
+[resource]
+script = ExtResource("1")
+id = "erbe"
+display_name = "Erbe"
+color = Color(0.25, 0.58, 0.19, 1)
+rarity = 1

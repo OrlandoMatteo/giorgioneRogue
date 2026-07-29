@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="EnemyData" load_steps=2 format=3]
+[ext_resource type="Script" path="res://scripts/data/enemy_data.gd" id="1"]
+[resource]
+script = ExtResource("1")
+id = "ladro"
+display_name = "Protestante Affamato"
+max_health = 27.0
+speed = 112.0
+contact_damage = 7.0
+radius = 16.0
+accent = Color(0.16, 0.11, 0.08, 1)
+drops = ["guanciale", "olio"]
