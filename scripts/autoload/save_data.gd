@@ -3,6 +3,7 @@ extends Node
 const SAVE_PATH := "user://giorgiones_feast_save.json"
 var data := {
 	"best_score": 0,
+	"leaderboard": [],
 	"unlocked_recipes": [],
 	"kitchen_level": 0,
 	"music_enabled": true,
@@ -22,6 +23,14 @@ func load_data() -> void:
 	if parsed is Dictionary:
 		for key in parsed:
 			data[key] = parsed[key]
+	if not data.leaderboard is Array:
+		data.leaderboard = []
+	if data.leaderboard.is_empty() and int(data.best_score) > 0:
+		data.leaderboard.append({
+			"score": int(data.best_score), "kills": 0, "zones": 3,
+			"endless_seconds": 0, "legacy": true,
+		})
+		save()
 
 func save() -> void:
 	var file := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
@@ -40,3 +49,26 @@ func set_best_score(value: int) -> bool:
 	save()
 	return true
 
+func record_run(value: int, kills: int, zones: int, endless_seconds: int) -> bool:
+	var entry := {
+		"score": value,
+		"kills": kills,
+		"zones": clampi(zones, 0, 5),
+		"endless_seconds": maxi(0, endless_seconds),
+		"timestamp": int(Time.get_unix_time_from_system()),
+	}
+	data.leaderboard.append(entry)
+	data.leaderboard.sort_custom(_score_is_higher)
+	if data.leaderboard.size() > 10:
+		data.leaderboard.resize(10)
+	var is_new_best := value > int(data.best_score)
+	if is_new_best:
+		data.best_score = value
+	save()
+	return is_new_best
+
+func get_leaderboard() -> Array:
+	return data.leaderboard.duplicate(true)
+
+func _score_is_higher(first: Dictionary, second: Dictionary) -> bool:
+	return int(first.get("score", 0)) > int(second.get("score", 0))

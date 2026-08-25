@@ -4,9 +4,9 @@
 // Incrementing CACHE_VERSION will kick off the install event and force
 // previously cached resources to be updated from the network.
 /** @type {string} */
-const CACHE_VERSION = '1785338517|8117941';
+const CACHE_VERSION = '1787690245|143938165';
 /** @type {string} */
-const CACHE_PREFIX = 'Giorgione's Feas-sw-cache-';
+const CACHE_PREFIX = 'Giorgione Feast-sw-cache-';
 const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;
 /** @type {string} */
 const OFFLINE_URL = 'index.offline.html';

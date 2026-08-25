@@ -11,6 +11,8 @@
 # Legacy/local Web exports. GitHub Pages is published only from /docs.
 /web/
 /Giorgione's Feast.*
+# Godot may try to import the generated PWA icons when scanning the project.
+/docs/*.import
 
 # Local TLS certificates and private keys must never be committed.
 *.pem
@@ -24,4 +26,3 @@ __pycache__/
 /.idea/
 .DS_Store
 Thumbs.db
-
