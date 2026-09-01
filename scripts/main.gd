@@ -3,7 +3,7 @@ extends Node2D
 ## A compact, self-contained vertical slice. Visuals are deliberately drawn with
 ## chunky primitives so the project runs before a texture atlas is imported.
 
-enum GameState { MENU, LEADERBOARD, PLAYING, COOKING, DINNER, GAME_OVER, PAUSED }
+enum GameState { MENU, LEADERBOARD, PLAYING, COOKING, ENDLESS_CHOICE, DINNER, GAME_OVER, PAUSED }
 
 const W := 720.0
 const H := 1280.0
@@ -14,6 +14,9 @@ const ZONE_DURATION := 150.0
 const FINITE_ZONE_COUNT := 5
 const INSPECTOR_TRIGGER_REMAINING := 90.0
 const ENDLESS_INSPECTOR_INTERVAL := 75.0
+const CAPRESE_HEAL_CAP := 0.75
+const CAPRESE_ABUNDANT_HEAL_CAP := 0.85
+const OBJECTIVE_HEAL := 8.0
 const CHEF_IDLE_TEXTURE: Texture2D = preload("res://assets/sprites/chef_walk_v3.png")
 const CHEF_ATTACK_TEXTURE: Texture2D = preload("res://assets/sprites/chef_attack_butter_v2.png")
 const BUTTER_PROJECTILE_TEXTURE: Texture2D = preload("res://assets/sprites/butter_projectile_v1.png")
@@ -62,6 +65,30 @@ var enemy_catalog = [
 	preload("res://data/enemies/ladro.tres"),
 	preload("res://data/enemies/ispettore.tres"),
 ]
+var recipe_evolutions := {
+	"caprese": [
+		{"id": "caprese_abbondante", "name": "Caprese Abbondante", "description": "Cura moderata, ma solo fino all'85% della vita."},
+		{"id": "caprese_pungente", "name": "Caprese Pungente", "description": "Cura poco fino al 75% e danneggia i nemici vicini."},
+	],
+	"tagliatelle": [
+		{"id": "tagliatelle_sprint", "name": "Tagliatelle Sprint", "description": "+20% velocità e scatto più lungo."},
+		{"id": "tagliatelle_scia", "name": "Scia al Burro", "description": "La scia è più larga e infligge più danni."},
+	],
+	"polenta": [
+		{"id": "polenta_raffica", "name": "Polenta a Raffica", "description": "Spara un proiettile aggiuntivo."},
+		{"id": "polenta_gigante", "name": "Polenta Gigante", "description": "+40% danno e proiettili più grandi."},
+	],
+	"porchetta": [
+		{"id": "porchetta_lunga", "name": "Porchetta Lunga", "description": "Rotazione più ampia e potente."},
+		{"id": "porchetta_frenetica", "name": "Porchetta Frenetica", "description": "La rotazione colpisce quasi due volte più spesso."},
+	],
+}
+var endless_modifier_catalog := [
+	{"id": "doppia_dispensa", "name": "Doppia Dispensa", "description": "Doppi ingredienti, nemici +15% veloci."},
+	{"id": "burro_critico", "name": "Burro Critico", "description": "25% colpi critici, nemici +20% danno."},
+	{"id": "giganti", "name": "Ospiti Giganti", "description": "Nemici più grandi e resistenti, punti doppi."},
+	{"id": "pioggia_burro", "name": "Pioggia di Burro", "description": "Raffica radiale automatica, più nemici."},
+]
 
 var state := GameState.MENU
 var rng := RandomNumberGenerator.new()
@@ -94,6 +121,18 @@ var next_endless_inspector_at := ENDLESS_INSPECTOR_INTERVAL
 var inspector_spawned_this_zone := false
 var score_recorded := false
 var recipe_levels := {}
+var recipe_evolution_choices := {}
+var active_endless_modifiers: Array[String] = []
+var next_modifier_wave := 2
+var butter_rain_clock := 0.0
+var inspection_zones: Array = []
+var floating_texts: Array = []
+var kill_combo := 0
+var combo_clock := 0.0
+var objective_kind := ""
+var objective_progress := 0
+var objective_target := 0
+var objective_completed := false
 var inventory := {}
 var enemies: Array = []
 var projectiles: Array = []
@@ -182,6 +221,9 @@ func build_interface() -> void:
 	hud_labels.pantry = make_label(Vector2(410, 51), Vector2(275, 42), 16, HORIZONTAL_ALIGNMENT_RIGHT)
 	for label in hud_labels.values():
 		top.add_child(label)
+	hud_labels.objective = make_label(Vector2(18, 120), Vector2(510, 34), 15, HORIZONTAL_ALIGNMENT_LEFT)
+	hud_labels.objective.add_theme_color_override("font_color", Color("#fff0a8"))
+	hud.add_child(hud_labels.objective)
 
 	var pause := make_button("II", Rect2(645, 22, 52, 42), 22)
 	pause.tooltip_text = "Pausa"
@@ -340,6 +382,14 @@ func start_run() -> void:
 	inspector_spawned_this_zone = false
 	score_recorded = false
 	recipe_levels.clear()
+	recipe_evolution_choices.clear()
+	active_endless_modifiers.clear()
+	next_modifier_wave = 2
+	butter_rain_clock = 0.0
+	inspection_zones.clear()
+	floating_texts.clear()
+	kill_combo = 0
+	combo_clock = 0.0
 	for key in INGREDIENT_LABELS:
 		inventory[key] = 1
 	enemies.clear()
@@ -348,11 +398,15 @@ func start_run() -> void:
 	deaths.clear()
 	butter_trails.clear()
 	was_new_best = false
+	setup_zone_objective()
 	AudioManager.play_music("campagna")
 	update_hud()
 
 func update_play(delta: float) -> void:
 	elapsed_run += delta
+	combo_clock = maxf(0.0, combo_clock - delta)
+	if combo_clock <= 0.0:
+		kill_combo = 0
 	if endless_mode:
 		endless_elapsed += delta
 		endless_score_clock += delta
@@ -373,6 +427,8 @@ func update_play(delta: float) -> void:
 		if absf(movement_direction.x) > 0.05:
 			player_facing = signf(movement_direction.x)
 		var speed_multiplier := 1.0 + 0.25 * int(recipe_levels.get("tagliatelle", 0))
+		if recipe_evolution_choices.get("tagliatelle", "") == "tagliatelle_sprint":
+			speed_multiplier += 0.20
 		player_pos += movement_direction * player_speed * speed_multiplier * delta
 	world_camera.position = player_pos
 	update_inspector_arrival()
@@ -384,6 +440,8 @@ func update_play(delta: float) -> void:
 			if difficulty_tier >= 3 and rng.randf() < 0.35:
 				spawn_enemy()
 		var endless_pressure := minf(0.28, endless_wave() * 0.035) if endless_mode else 0.0
+		if "pioggia_burro" in active_endless_modifiers:
+			endless_pressure += 0.12
 		spawn_clock = maxf(0.20, 1.22 - elapsed_run / 340.0 - difficulty_tier * 0.12 - endless_pressure)
 	attack_clock -= delta
 	if attack_clock <= 0.0:
@@ -395,10 +453,15 @@ func update_play(delta: float) -> void:
 	update_drops(delta)
 	update_trails(delta)
 	update_deaths(delta)
+	update_inspection_zones(delta)
+	update_floating_texts(delta)
+	update_butter_rain(delta)
 	if player_health <= 0.0:
 		show_game_over()
 	elif not endless_mode and zone_remaining <= 0.0:
 		finish_zone()
+	elif endless_mode and endless_wave() >= next_modifier_wave:
+		show_endless_modifier_choice()
 	update_hud()
 
 func keyboard_direction() -> Vector2:
@@ -443,11 +506,26 @@ func spawn_enemy_data(data: EnemyData) -> void:
 	enemy.pos = position
 	var endless_scale := maxf(0.0, float(endless_wave() - 1)) if endless_mode else 0.0
 	enemy.max_hp = data.max_health * (1.0 + difficulty_tier * 0.14 + endless_scale * 0.11)
+	enemy.visual_scale = 1.0
+	if "giganti" in active_endless_modifiers:
+		enemy.max_hp *= 1.55
+		enemy.visual_scale = 1.28
+	if data.id == "ispettore":
+		enemy.max_hp *= 1.35 + minf(0.75, zone_index * 0.12)
 	enemy.hp = enemy.max_hp
 	enemy.speed_scale = 1.0 + difficulty_tier * 0.055 + minf(0.45, endless_scale * 0.035)
 	enemy.damage_scale = 1.0 + difficulty_tier * 0.075 + endless_scale * 0.065
+	if "doppia_dispensa" in active_endless_modifiers:
+		enemy.speed_scale *= 1.15
+	if "burro_critico" in active_endless_modifiers:
+		enemy.damage_scale *= 1.20
 	enemy.hit_flash = 0.0
 	enemy.touch_clock = 0.0
+	enemy.behavior_clock = rng.randf_range(1.2, 3.5)
+	enemy.charge_time = 0.0
+	enemy.escape_time = 0.0
+	enemy.ability_clock = 3.5
+	enemy.phase_two = false
 	enemy.facing = -1.0 if player_pos.x < enemy.pos.x else 1.0
 	enemies.append(enemy)
 
@@ -458,10 +536,12 @@ func update_inspector_arrival() -> void:
 	if endless_mode:
 		if endless_elapsed >= next_endless_inspector_at and not has_inspector():
 			spawn_enemy_data(enemy_catalog[2])
+			add_floating_text("ARRIVA L'ISPETTORE!", player_pos + Vector2(0, -100), Color("#ffb84d"))
 			next_endless_inspector_at = endless_elapsed + ENDLESS_INSPECTOR_INTERVAL
 		return
 	if not inspector_spawned_this_zone and zone_remaining <= INSPECTOR_TRIGGER_REMAINING:
 		spawn_enemy_data(enemy_catalog[2])
+		add_floating_text("ARRIVA L'ISPETTORE!", player_pos + Vector2(0, -100), Color("#ffb84d"))
 		inspector_spawned_this_zone = true
 
 func has_inspector() -> bool:
@@ -490,8 +570,12 @@ func auto_attack() -> void:
 			target = enemy
 	var base_direction: Vector2 = (target.pos - player_pos).normalized()
 	var shot_count: int = 2 if difficulty_tier >= 4 else 1
+	if recipe_evolution_choices.get("polenta", "") == "polenta_raffica":
+		shot_count += 1
+	if int(inventory.get("guanciale", 0)) >= 5 and attack_sequence % 3 == 0:
+		shot_count += 1
 	for shot in range(shot_count):
-		var angle_offset: float = (shot - (shot_count - 1) * 0.5) * 0.18
+		var angle_offset: float = (shot - (shot_count - 1) * 0.5) * 0.16
 		spawn_food_projectile(projectile_kind_for_shot(shot), base_direction.rotated(angle_offset))
 	attack_sequence += 1
 	attack_animation_time = CHEF_ATTACK_DURATION
@@ -518,6 +602,7 @@ func spawn_food_projectile(kind: String, direction: Vector2) -> void:
 	projectile.hit_uids = []
 	projectile.splash_radius = 0.0
 	projectile.splash_damage = 0.0
+	projectile.critical = "burro_critico" in active_endless_modifiers and rng.randf() < 0.25
 	match kind:
 		"frittata":
 			projectile.damage = 29.0 + 8.0 * polenta_level
@@ -535,6 +620,14 @@ func spawn_food_projectile(kind: String, direction: Vector2) -> void:
 			projectile.hits_left = 1
 	if difficulty_tier >= 4:
 		projectile.damage *= 1.18
+	if recipe_evolution_choices.get("polenta", "") == "polenta_gigante":
+		projectile.damage *= 1.40
+		projectile.radius *= 1.28
+	if int(inventory.get("olio", 0)) >= 5:
+		projectile.splash_radius = maxf(float(projectile.splash_radius), 54.0)
+		projectile.splash_damage = maxf(float(projectile.splash_damage), float(projectile.damage) * 0.35)
+	if bool(projectile.critical):
+		projectile.damage *= 2.0
 	projectiles.append(projectile)
 
 func acquire_projectile() -> Dictionary:
@@ -550,16 +643,63 @@ func update_enemies(delta: float) -> void:
 		var enemy: Dictionary = enemies[index]
 		enemy.hit_flash = maxf(0.0, float(enemy.hit_flash) - delta)
 		enemy.touch_clock = maxf(0.0, float(enemy.touch_clock) - delta)
+		enemy.behavior_clock = float(enemy.get("behavior_clock", 1.0)) - delta
+		enemy.charge_time = maxf(0.0, float(enemy.get("charge_time", 0.0)) - delta)
+		enemy.escape_time = maxf(0.0, float(enemy.get("escape_time", 0.0)) - delta)
 		var direction: Vector2 = (player_pos - enemy.pos).normalized()
+		var movement_multiplier := 1.0
+		match String(enemy.data.id):
+			"turista":
+				if float(enemy.behavior_clock) <= 0.0:
+					enemy.charge_time = 0.72
+					enemy.behavior_clock = rng.randf_range(3.2, 4.8)
+				if float(enemy.charge_time) > 0.0:
+					movement_multiplier = 2.25
+			"ladro":
+				if float(enemy.escape_time) > 0.0:
+					direction = (enemy.pos - player_pos).normalized()
+					movement_multiplier = 1.65
+				else:
+					var drop_index := nearest_drop_index(enemy.pos, 290.0)
+					if drop_index >= 0:
+						direction = (drops[drop_index].pos - enemy.pos).normalized()
+						movement_multiplier = 1.32
+						if enemy.pos.distance_to(drops[drop_index].pos) < 34.0:
+							drops.remove_at(drop_index)
+							enemy.escape_time = 2.5
+							add_floating_text("RUBATO!", enemy.pos, Color("#f2b84b"))
+			"ispettore":
+				var health_ratio: float = float(enemy.hp) / maxf(1.0, float(enemy.max_hp))
+				if health_ratio <= 0.5 and not bool(enemy.phase_two):
+					enemy.phase_two = true
+					add_floating_text("ISPEZIONE SEVERA!", enemy.pos + Vector2(0, -90), Color("#ff6b57"))
+				if bool(enemy.phase_two):
+					movement_multiplier = 1.28
+				enemy.ability_clock = float(enemy.get("ability_clock", 2.0)) - delta
+				if float(enemy.ability_clock) <= 0.0:
+					create_inspection_zone(player_pos)
+					if bool(enemy.phase_two):
+						create_inspection_zone(player_pos + Vector2(rng.randf_range(-105, 105), rng.randf_range(-105, 105)))
+					enemy.ability_clock = 2.8 if bool(enemy.phase_two) else 4.4
 		if absf(direction.x) > 0.05:
 			enemy.facing = signf(direction.x)
-		enemy.pos += direction * enemy.data.speed * float(enemy.get("speed_scale", 1.0)) * delta
-		var collision_radius: float = enemy.data.radius * ENEMY_COLLISION_SCALE
+		enemy.pos += direction * enemy.data.speed * float(enemy.get("speed_scale", 1.0)) * movement_multiplier * delta
+		var collision_radius: float = enemy.data.radius * ENEMY_COLLISION_SCALE * float(enemy.get("visual_scale", 1.0))
 		if enemy.pos.distance_to(player_pos) < collision_radius + 20.0 and enemy.touch_clock <= 0.0:
 			damage_player(enemy.data.contact_damage * float(enemy.get("damage_scale", 1.0)))
 			enemy.touch_clock = 0.7
 		if enemy.hp <= 0.0:
 			defeat_enemy(index)
+
+func nearest_drop_index(origin: Vector2, maximum_distance: float) -> int:
+	var result := -1
+	var closest_squared := maximum_distance * maximum_distance
+	for index in range(drops.size()):
+		var distance_squared: float = origin.distance_squared_to(drops[index].pos)
+		if distance_squared < closest_squared:
+			closest_squared = distance_squared
+			result = index
+	return result
 
 func update_projectiles(delta: float) -> void:
 	for index in range(projectiles.size() - 1, -1, -1):
@@ -572,10 +712,11 @@ func update_projectiles(delta: float) -> void:
 				var enemy_uid: int = int(enemy.get("uid", 0))
 				if enemy_uid in projectile.hit_uids:
 					continue
-				var enemy_radius: float = enemy.data.radius * ENEMY_COLLISION_SCALE
+				var enemy_radius: float = enemy.data.radius * ENEMY_COLLISION_SCALE * float(enemy.get("visual_scale", 1.0))
 				if projectile.pos.distance_to(enemy.pos) < projectile.radius + enemy_radius:
 					enemy.hp -= projectile.damage
 					enemy.hit_flash = 0.12
+					add_floating_text(("CRIT %d" if bool(projectile.get("critical", false)) else "%d") % int(projectile.damage), enemy.pos, Color("#fff06a") if bool(projectile.get("critical", false)) else Color.WHITE)
 					projectile.hit_uids.append(enemy_uid)
 					if float(projectile.splash_radius) > 0.0:
 						apply_projectile_splash(projectile, enemy_uid)
@@ -601,6 +742,8 @@ func update_drops(delta: float) -> void:
 		if drop.pos.distance_to(player_pos) < 46.0:
 			inventory[drop.kind] = int(inventory.get(drop.kind, 0)) + 1
 			score += 12
+			progress_objective("collect", String(drop.kind))
+			add_floating_text("+%s" % INGREDIENT_LABELS.get(drop.kind, drop.kind), drop.pos, Color("#d8ee7a"))
 			drops.remove_at(index)
 			AudioManager.play_sfx("raccolta")
 		elif drop.life <= 0.0:
@@ -610,9 +753,11 @@ func update_trails(delta: float) -> void:
 	for index in range(butter_trails.size() - 1, -1, -1):
 		var trail: Dictionary = butter_trails[index]
 		trail.life -= delta
+		var trail_radius := 52.0 if bool(trail.get("strong", false)) else 34.0
+		var trail_damage := 22.0 if bool(trail.get("strong", false)) else 12.0
 		for enemy in enemies:
-			if enemy.pos.distance_to(trail.pos) < 34.0:
-				enemy.hp -= 12.0 * delta
+			if enemy.pos.distance_to(trail.pos) < trail_radius:
+				enemy.hp -= trail_damage * delta
 		if trail.life <= 0.0:
 			butter_trails.remove_at(index)
 
@@ -626,20 +771,34 @@ func update_deaths(delta: float) -> void:
 func update_recipe_effects(delta: float) -> void:
 	if int(recipe_levels.get("caprese", 0)) > 0:
 		caprese_clock += delta
-		if caprese_clock > 1.0:
-			player_health = minf(player_max_health, player_health + 1.6 * int(recipe_levels.get("caprese", 0)))
+		var abundant_caprese: bool = recipe_evolution_choices.get("caprese", "") == "caprese_abbondante"
+		var caprese_interval: float = 1.6 if abundant_caprese else 2.4
+		if caprese_clock > caprese_interval:
+			var healing: float = 1.15 if abundant_caprese else 0.75
+			var healing_cap: float = player_max_health * (CAPRESE_ABUNDANT_HEAL_CAP if abundant_caprese else CAPRESE_HEAL_CAP)
+			if player_health < healing_cap:
+				player_health = minf(healing_cap, player_health + healing * int(recipe_levels.get("caprese", 0)))
+			if recipe_evolution_choices.get("caprese", "") == "caprese_pungente":
+				for enemy in enemies:
+					if enemy.pos.distance_to(player_pos) < 115.0:
+						enemy.hp -= 9.0
+						enemy.hit_flash = 0.10
 			caprese_clock = 0.0
 	if int(recipe_levels.get("tagliatelle", 0)) > 0:
 		trail_clock += delta
-		if trail_clock > 0.35:
-			butter_trails.append({"pos": player_pos, "life": 2.2})
+		var trail_interval := 0.24 if recipe_evolution_choices.get("tagliatelle", "") == "tagliatelle_scia" else 0.35
+		if trail_clock > trail_interval:
+			butter_trails.append({"pos": player_pos, "life": 3.0 if recipe_evolution_choices.get("tagliatelle", "") == "tagliatelle_scia" else 2.2, "strong": recipe_evolution_choices.get("tagliatelle", "") == "tagliatelle_scia"})
 			trail_clock = 0.0
 	if int(recipe_levels.get("porchetta", 0)) > 0:
 		porchetta_clock += delta
-		if porchetta_clock > 0.32:
+		var porchetta_interval := 0.18 if recipe_evolution_choices.get("porchetta", "") == "porchetta_frenetica" else 0.32
+		if porchetta_clock > porchetta_interval:
+			var porchetta_range := 135.0 if recipe_evolution_choices.get("porchetta", "") == "porchetta_lunga" else 95.0
+			var porchetta_damage := 27.0 if recipe_evolution_choices.get("porchetta", "") == "porchetta_lunga" else 19.0
 			for enemy in enemies:
-				if enemy.pos.distance_to(player_pos) < 95.0:
-					enemy.hp -= 19.0 * int(recipe_levels.get("porchetta", 0))
+				if enemy.pos.distance_to(player_pos) < porchetta_range:
+					enemy.hp -= porchetta_damage * int(recipe_levels.get("porchetta", 0))
 					enemy.hit_flash = 0.10
 			porchetta_clock = 0.0
 
@@ -653,16 +812,27 @@ func damage_player(amount: float) -> void:
 func defeat_enemy(index: int) -> void:
 	var enemy: Dictionary = enemies[index]
 	kills += 1
+	kill_combo = kill_combo + 1 if combo_clock > 0.0 else 1
+	combo_clock = 2.4
 	update_difficulty_from_kills()
-	score += 30 + difficulty_tier * 8 if enemy.data.id != "ispettore" else 450
+	var base_score: int = 30 + difficulty_tier * 8 if enemy.data.id != "ispettore" else 450
+	if "giganti" in active_endless_modifiers:
+		base_score *= 2
+	score += int(base_score * (1.0 + minf(0.75, kill_combo * 0.05)))
+	progress_objective("kill", String(enemy.data.id))
+	if kill_combo >= 3:
+		add_floating_text("COMBO x%d" % kill_combo, enemy.pos + Vector2(0, -55), Color("#ffd34e"))
 	deaths.append({
 		"id": String(enemy.data.id),
 		"pos": enemy.pos,
 		"facing": float(enemy.get("facing", 1.0)),
 		"time": 0.0,
 		"duration": 0.72,
+		"visual_scale": float(enemy.get("visual_scale", 1.0)),
 	})
 	var count: int = 3 if enemy.data.id == "ispettore" else 1
+	if "doppia_dispensa" in active_endless_modifiers:
+		count *= 2
 	for amount in count:
 		var ingredient = enemy.data.drops[rng.randi_range(0, enemy.data.drops.size() - 1)]
 		drops.append({"kind": ingredient, "pos": enemy.pos + Vector2(rng.randf_range(-18, 18), rng.randf_range(-18, 18)), "life": 11.0})
@@ -685,6 +855,7 @@ func finish_zone() -> void:
 	enemies.clear()
 	projectiles.clear()
 	deaths.clear()
+	inspection_zones.clear()
 	show_cooking()
 
 func show_cooking() -> void:
@@ -753,6 +924,37 @@ func cook_recipe(recipe) -> void:
 	RunState.completed_recipes.append(recipe.id)
 	SaveData.unlock_recipe(recipe.id)
 	score += 120
+	show_recipe_evolution(recipe)
+
+func show_recipe_evolution(recipe: RecipeData) -> void:
+	clear_overlay()
+	var panel := make_panel(Rect2(52, 300, 616, 650), Color("#293b20"), recipe.accent)
+	overlay.add_child(panel)
+	var heading := make_label(Vector2(30, 30), Vector2(556, 68), 31)
+	heading.text = "EVOLVI: %s" % recipe.display_name.to_upper()
+	panel.add_child(heading)
+	var note := make_label(Vector2(45, 102), Vector2(526, 55), 17)
+	note.text = "Scegli una specialità per questa partita."
+	panel.add_child(note)
+	var choices: Array = recipe_evolutions.get(recipe.id, [])
+	for index in range(choices.size()):
+		var choice: Dictionary = choices[index]
+		var card := make_panel(Rect2(42, 185 + index * 175, 532, 142), Color("#3a4f2a"), recipe.accent)
+		panel.add_child(card)
+		var title := make_label(Vector2(18, 12), Vector2(496, 38), 22)
+		title.text = String(choice.name)
+		card.add_child(title)
+		var description := make_label(Vector2(25, 52), Vector2(482, 42), 16)
+		description.text = String(choice.description)
+		description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		card.add_child(description)
+		var select := make_button("SCEGLI", Rect2(165, 96, 202, 40), 17)
+		select.pressed.connect(select_recipe_evolution.bind(String(recipe.id), String(choice.id)))
+		card.add_child(select)
+
+func select_recipe_evolution(recipe_id: String, evolution_id: String) -> void:
+	recipe_evolution_choices[recipe_id] = evolution_id
+	score += 180
 	advance_to_next_zone()
 
 func skip_cooking() -> void:
@@ -769,11 +971,172 @@ func advance_to_next_zone() -> void:
 		endless_score_clock = 0.0
 		next_endless_inspector_at = ENDLESS_INSPECTOR_INTERVAL
 		score += 1000
+		next_modifier_wave = 2
 	spawn_clock = 1.0
 	state = GameState.PLAYING
 	clear_overlay()
+	setup_zone_objective()
 	AudioManager.play_sfx("cucina")
 	update_hud()
+
+func setup_zone_objective() -> void:
+	objective_progress = 0
+	objective_completed = false
+	match zone_index:
+		0:
+			objective_kind = "collect_any"
+			objective_target = 8
+		1:
+			objective_kind = "kill_ladro"
+			objective_target = 8
+		2:
+			objective_kind = "kill_any"
+			objective_target = 18
+		3:
+			objective_kind = "collect_guanciale"
+			objective_target = 6
+		4:
+			objective_kind = "kill_ispettore"
+			objective_target = 1
+		_:
+			objective_kind = "endless"
+			objective_target = 0
+
+func progress_objective(event_kind: String, detail: String) -> void:
+	if objective_completed or endless_mode:
+		return
+	var matches := false
+	match objective_kind:
+		"collect_any":
+			matches = event_kind == "collect"
+		"kill_ladro":
+			matches = event_kind == "kill" and detail == "ladro"
+		"kill_any":
+			matches = event_kind == "kill"
+		"collect_guanciale":
+			matches = event_kind == "collect" and detail == "guanciale"
+		"kill_ispettore":
+			matches = event_kind == "kill" and detail == "ispettore"
+	if not matches:
+		return
+	objective_progress = mini(objective_target, objective_progress + 1)
+	if objective_progress >= objective_target:
+		objective_completed = true
+		var reward := 350 + zone_index * 100
+		score += reward
+		player_health = minf(player_max_health, player_health + OBJECTIVE_HEAL)
+		add_floating_text("OBIETTIVO! +%d" % reward, player_pos + Vector2(0, -90), Color("#fff06a"))
+
+func objective_text() -> String:
+	if endless_mode:
+		return "MODIFICATORI: %d  •  SINERGIE: %s" % [active_endless_modifiers.size(), synergy_text()]
+	var label := ""
+	match objective_kind:
+		"collect_any": label = "Raccogli ingredienti"
+		"kill_ladro": label = "Ferma i ladri"
+		"kill_any": label = "Sconfiggi gli ospiti"
+		"collect_guanciale": label = "Raccogli guanciale"
+		"kill_ispettore": label = "Supera l'ispezione"
+	if objective_completed:
+		return "✓ %s completato" % label
+	return "%s: %d/%d" % [label, objective_progress, objective_target]
+
+func synergy_text() -> String:
+	var synergies: Array[String] = []
+	if int(inventory.get("guanciale", 0)) >= 5:
+		synergies.append("RAFFICA")
+	if int(inventory.get("olio", 0)) >= 5:
+		synergies.append("SCHIZZO")
+	return "-" if synergies.is_empty() else "+".join(synergies)
+
+func show_endless_modifier_choice() -> void:
+	next_modifier_wave = endless_wave() + 1
+	var available: Array = []
+	for modifier in endless_modifier_catalog:
+		if String(modifier.id) not in active_endless_modifiers:
+			available.append(modifier)
+	if available.is_empty():
+		score += 500
+		add_floating_text("ONDA DOMINATA +500", player_pos, Color("#fff06a"))
+		return
+	available.shuffle()
+	state = GameState.ENDLESS_CHOICE
+	clear_overlay()
+	var panel := make_panel(Rect2(64, 330, 592, 620), Color("#34243d"), Color("#f3d47c"))
+	overlay.add_child(panel)
+	var heading := make_label(Vector2(25, 30), Vector2(542, 70), 32)
+	heading.text = "ONDA %d: SCEGLI IL RISCHIO" % endless_wave()
+	panel.add_child(heading)
+	for index in range(mini(2, available.size())):
+		var modifier: Dictionary = available[index]
+		var card := make_panel(Rect2(40, 135 + index * 190, 512, 160), Color("#4b3153"), Color("#d49a55"))
+		panel.add_child(card)
+		var title := make_label(Vector2(16, 10), Vector2(480, 40), 22)
+		title.text = String(modifier.name)
+		card.add_child(title)
+		var description := make_label(Vector2(24, 50), Vector2(464, 55), 16)
+		description.text = String(modifier.description)
+		description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		card.add_child(description)
+		var choose := make_button("ACCETTA", Rect2(155, 110, 202, 42), 17)
+		choose.pressed.connect(select_endless_modifier.bind(String(modifier.id)))
+		card.add_child(choose)
+
+func select_endless_modifier(modifier_id: String) -> void:
+	if modifier_id not in active_endless_modifiers:
+		active_endless_modifiers.append(modifier_id)
+		for enemy in enemies:
+			match modifier_id:
+				"doppia_dispensa":
+					enemy.speed_scale = float(enemy.speed_scale) * 1.15
+				"burro_critico":
+					enemy.damage_scale = float(enemy.damage_scale) * 1.20
+				"giganti":
+					enemy.max_hp = float(enemy.max_hp) * 1.55
+					enemy.hp = float(enemy.hp) * 1.55
+					enemy.visual_scale = 1.28
+	score += 250
+	state = GameState.PLAYING
+	clear_overlay()
+
+func create_inspection_zone(position: Vector2) -> void:
+	inspection_zones.append({"pos": position, "time": 0.0, "triggered": false, "radius": 82.0})
+
+func update_inspection_zones(delta: float) -> void:
+	for index in range(inspection_zones.size() - 1, -1, -1):
+		var zone: Dictionary = inspection_zones[index]
+		zone.time = float(zone.time) + delta
+		if float(zone.time) >= 1.05 and not bool(zone.triggered):
+			zone.triggered = true
+			if player_pos.distance_to(zone.pos) <= float(zone.radius):
+				damage_player(18.0)
+				add_floating_text("VERBALE!", player_pos, Color("#ff6b57"))
+		if float(zone.time) >= 1.55:
+			inspection_zones.remove_at(index)
+
+func add_floating_text(value: String, position: Vector2, color: Color) -> void:
+	if floating_texts.size() >= 36:
+		floating_texts.pop_front()
+	floating_texts.append({"text": value, "pos": position, "color": color, "life": 0.85})
+
+func update_floating_texts(delta: float) -> void:
+	for index in range(floating_texts.size() - 1, -1, -1):
+		var item: Dictionary = floating_texts[index]
+		item.life = float(item.life) - delta
+		item.pos += Vector2.UP * 34.0 * delta
+		if float(item.life) <= 0.0:
+			floating_texts.remove_at(index)
+
+func update_butter_rain(delta: float) -> void:
+	if "pioggia_burro" not in active_endless_modifiers:
+		return
+	butter_rain_clock += delta
+	if butter_rain_clock < 3.8:
+		return
+	butter_rain_clock = 0.0
+	for index in range(8):
+		spawn_food_projectile("burro", Vector2.RIGHT.rotated(TAU * index / 8.0))
+	add_floating_text("PIOGGIA DI BURRO!", player_pos + Vector2(0, -70), Color("#fff06a"))
 
 func dash() -> void:
 	if state != GameState.PLAYING or elapsed_run < dash_ready_at:
@@ -786,7 +1149,8 @@ func dash() -> void:
 	var dash_direction: Vector2 = direction.normalized()
 	if absf(dash_direction.x) > 0.05:
 		player_facing = signf(dash_direction.x)
-	player_pos += dash_direction * 120.0
+	var dash_distance := 165.0 if recipe_evolution_choices.get("tagliatelle", "") == "tagliatelle_sprint" else 120.0
+	player_pos += dash_direction * dash_distance
 	world_camera.position = player_pos
 	player_invulnerable = 0.45
 	dash_ready_at = elapsed_run + 2.8
@@ -798,7 +1162,7 @@ func show_dinner() -> void:
 	var ingredient_value: int = 0
 	for ingredient in inventory:
 		ingredient_value += int(inventory[ingredient]) * (6 if ingredient != "vino" else 15)
-	var recipe_value: int = RunState.completed_recipes.size() * 260
+	var recipe_value: int = RunState.completed_recipes.size() * 260 + recipe_evolution_choices.size() * 150
 	var freshness: int = int(player_health * 3.0)
 	var wine_pairing: int = int(inventory.get("vino", 0)) * 35
 	score += ingredient_value + recipe_value + freshness + wine_pairing
@@ -897,7 +1261,8 @@ func update_hud() -> void:
 		var remaining_seconds := int(maxf(0.0, zone_remaining))
 		hud_labels.timer.text = "%02d:%02d" % [floori(remaining_seconds / 60.0), remaining_seconds % 60]
 	hud_labels.health.text = "VITA %d / %d" % [int(player_health), int(player_max_health)]
-	hud_labels.score.text = "PUNTI %d - KO %d" % [score, kills]
+	hud_labels.score.text = "PUNTI %d - KO %d%s" % [score, kills, " x%d" % kill_combo if kill_combo >= 3 else ""]
+	hud_labels.objective.text = objective_text()
 	var compact := ""
 	for key in ["guanciale", "olio", "formaggio", "vino"]:
 		compact += "%s:%d  " % [INGREDIENT_LABELS[key].left(3), int(inventory.get(key, 0))]
@@ -906,8 +1271,13 @@ func update_hud() -> void:
 
 func _draw() -> void:
 	draw_pixel_background()
+	for zone in inspection_zones:
+		var warning_progress: float = clampf(float(zone.time) / 1.05, 0.0, 1.0)
+		var zone_color := Color(0.92, 0.20, 0.14, 0.12 + warning_progress * 0.20)
+		draw_circle(zone.pos, float(zone.radius), zone_color)
+		draw_arc(zone.pos, float(zone.radius), 0.0, TAU, 36, Color(1.0, 0.76, 0.28, 0.55 + warning_progress * 0.35), 4.0)
 	for trail in butter_trails:
-		draw_circle(trail.pos, 18.0, Color(1.0, 0.85, 0.35, 0.42))
+		draw_circle(trail.pos, 27.0 if bool(trail.get("strong", false)) else 18.0, Color(1.0, 0.85, 0.35, 0.42))
 	for death in deaths:
 		draw_enemy_death(death)
 	for drop in drops:
@@ -917,6 +1287,10 @@ func _draw() -> void:
 	for enemy in enemies:
 		draw_enemy(enemy)
 	draw_player()
+	for item in floating_texts:
+		var text_color: Color = item.color
+		text_color.a = clampf(float(item.life) / 0.35, 0.0, 1.0)
+		draw_string(ThemeDB.fallback_font, item.pos, String(item.text), HORIZONTAL_ALIGNMENT_CENTER, 140, 18, text_color)
 	if state == GameState.PLAYING:
 		draw_virtual_joystick()
 
@@ -1115,6 +1489,7 @@ func draw_enemy_death(death: Dictionary) -> void:
 			draw_size = 128.0
 		"turista":
 			draw_size = 124.0
+	draw_size *= float(death.get("visual_scale", 1.0))
 	var progress: float = clampf(float(death.time) / float(death.duration), 0.0, 0.999)
 	var frame: int = clampi(floori(progress * float(ENEMY_ANIMATION_FRAMES)), 0, ENEMY_ANIMATION_FRAMES - 1)
 	var source := Rect2(Vector2(frame * 128, 0), CHEF_FRAME_SIZE)
@@ -1221,6 +1596,7 @@ func draw_human_enemy(enemy: Dictionary) -> void:
 		"ladro":
 			texture = ENEMY_LADRO_TEXTURE
 			draw_size = 128.0
+	draw_size *= float(enemy.get("visual_scale", 1.0))
 	var phase: float = elapsed_run * 10.0 + float(enemy.pos.x) * 0.013
 	var frame: int = floori(phase) % ENEMY_ANIMATION_FRAMES
 	var source: Rect2 = Rect2(Vector2(frame * 128, 0), CHEF_FRAME_SIZE)
