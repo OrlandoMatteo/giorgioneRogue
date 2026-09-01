@@ -3,7 +3,7 @@ extends Node2D
 ## A compact, self-contained vertical slice. Visuals are deliberately drawn with
 ## chunky primitives so the project runs before a texture atlas is imported.
 
-enum GameState { MENU, LEADERBOARD, PLAYING, COOKING, ENDLESS_CHOICE, DINNER, GAME_OVER, PAUSED }
+enum GameState { MENU, LEADERBOARD, PLAYING, COOKING, WEAPON_CHOICE, ENDLESS_CHOICE, DINNER, GAME_OVER, PAUSED }
 
 const W := 720.0
 const H := 1280.0
@@ -12,8 +12,9 @@ const PLAY_BOTTOM := 1055.0
 const WORLD_TILE_SIZE := 64.0
 const ZONE_DURATION := 150.0
 const FINITE_ZONE_COUNT := 5
-const INSPECTOR_TRIGGER_REMAINING := 90.0
-const ENDLESS_INSPECTOR_INTERVAL := 75.0
+const WAVES_PER_ZONE := 5
+const WAVE_ACTIVE_DURATION := 22.0
+const WAVE_BREAK_DURATION := 8.0
 const CAPRESE_HEAL_CAP := 0.75
 const CAPRESE_ABUNDANT_HEAL_CAP := 0.85
 const OBJECTIVE_HEAL := 8.0
@@ -89,6 +90,12 @@ var endless_modifier_catalog := [
 	{"id": "giganti", "name": "Ospiti Giganti", "description": "Nemici più grandi e resistenti, punti doppi."},
 	{"id": "pioggia_burro", "name": "Pioggia di Burro", "description": "Raffica radiale automatica, più nemici."},
 ]
+var weapon_upgrade_catalog := [
+	{"id": "vitello_tonnato", "name": "Vitello Tonnato Volante", "description": "+20% danno a tutti i proiettili."},
+	{"id": "uova_purgatorio", "name": "Uova in Purgatorio", "description": "Gli impatti esplodono in un'area sempre piu grande."},
+	{"id": "spaghetti_aglione", "name": "Spaghetti all'Aglione", "description": "+10% cadenza e +8% velocita dei proiettili."},
+	{"id": "kegiorg", "name": "KeGiorg Rotante", "description": "I proiettili attraversano un nemico aggiuntivo."},
+]
 
 var state := GameState.MENU
 var rng := RandomNumberGenerator.new()
@@ -102,6 +109,13 @@ var player_is_moving := false
 var zone_index := 0
 var zone_remaining := ZONE_DURATION
 var spawn_clock := 0.0
+var wave_number := 1
+var wave_active := true
+var wave_time_remaining := WAVE_ACTIVE_DURATION
+var wave_break_remaining := 0.0
+var wave_spawn_budget := 0
+var wave_spawned := 0
+var wave_is_special := false
 var attack_clock := 0.0
 var attack_animation_time := 0.0
 var caprese_clock := 0.0
@@ -117,13 +131,15 @@ var next_enemy_uid := 1
 var endless_mode := false
 var endless_elapsed := 0.0
 var endless_score_clock := 0.0
-var next_endless_inspector_at := ENDLESS_INSPECTOR_INTERVAL
 var inspector_spawned_this_zone := false
 var score_recorded := false
 var recipe_levels := {}
 var recipe_evolution_choices := {}
 var active_endless_modifiers: Array[String] = []
-var next_modifier_wave := 2
+var next_modifier_wave := 3
+var weapon_upgrade_levels := {}
+var collected_drops := 0
+var next_weapon_upgrade_at := 5
 var butter_rain_clock := 0.0
 var inspection_zones: Array = []
 var floating_texts: Array = []
@@ -509,13 +525,15 @@ func start_run() -> void:
 	endless_mode = false
 	endless_elapsed = 0.0
 	endless_score_clock = 0.0
-	next_endless_inspector_at = ENDLESS_INSPECTOR_INTERVAL
 	inspector_spawned_this_zone = false
 	score_recorded = false
 	recipe_levels.clear()
 	recipe_evolution_choices.clear()
 	active_endless_modifiers.clear()
-	next_modifier_wave = 2
+	next_modifier_wave = 3
+	weapon_upgrade_levels.clear()
+	collected_drops = 0
+	next_weapon_upgrade_at = 5
 	butter_rain_clock = 0.0
 	inspection_zones.clear()
 	floating_texts.clear()
@@ -530,6 +548,7 @@ func start_run() -> void:
 	butter_trails.clear()
 	was_new_best = false
 	setup_zone_objective()
+	begin_wave(1)
 	AudioManager.play_music("campagna")
 	update_hud()
 
@@ -562,22 +581,13 @@ func update_play(delta: float) -> void:
 			speed_multiplier += 0.20
 		player_pos += movement_direction * player_speed * speed_multiplier * delta
 	world_camera.position = player_pos
-	update_inspector_arrival()
-	spawn_clock -= delta
-	if spawn_clock <= 0.0:
-		var enemy_limit := 60 + mini(30, endless_wave() * 5) if endless_mode else 60
-		if enemies.size() < enemy_limit:
-			spawn_enemy()
-			if difficulty_tier >= 3 and rng.randf() < 0.35:
-				spawn_enemy()
-		var endless_pressure := minf(0.28, endless_wave() * 0.035) if endless_mode else 0.0
-		if "pioggia_burro" in active_endless_modifiers:
-			endless_pressure += 0.12
-		spawn_clock = maxf(0.20, 1.22 - elapsed_run / 340.0 - difficulty_tier * 0.12 - endless_pressure)
+	update_wave_director(delta)
 	attack_clock -= delta
 	if attack_clock <= 0.0:
 		auto_attack()
-		attack_clock = maxf(0.26, 0.68 - 0.08 * int(recipe_levels.get("polenta", 0)))
+		var aglione_level: int = int(weapon_upgrade_levels.get("spaghetti_aglione", 0))
+		var weapon_speed_multiplier: float = maxf(0.55, 1.0 - 0.10 * aglione_level)
+		attack_clock = maxf(0.20, (0.68 - 0.08 * int(recipe_levels.get("polenta", 0))) * weapon_speed_multiplier)
 	update_recipe_effects(delta)
 	update_enemies(delta)
 	update_projectiles(delta)
@@ -589,9 +599,9 @@ func update_play(delta: float) -> void:
 	update_butter_rain(delta)
 	if player_health <= 0.0:
 		show_game_over()
-	elif not endless_mode and zone_remaining <= 0.0:
-		finish_zone()
-	elif endless_mode and endless_wave() >= next_modifier_wave:
+	elif state == GameState.PLAYING and collected_drops >= next_weapon_upgrade_at:
+		show_weapon_upgrade_choice()
+	elif state == GameState.PLAYING and endless_mode and endless_wave() >= next_modifier_wave:
 		show_endless_modifier_choice()
 	update_hud()
 
@@ -621,7 +631,7 @@ func spawn_enemy() -> void:
 	var data: EnemyData = options[rng.randi_range(0, options.size() - 1)]
 	spawn_enemy_data(data)
 
-func spawn_enemy_data(data: EnemyData) -> void:
+func spawn_enemy_data(data: EnemyData) -> Dictionary:
 	var side := rng.randi_range(0, 3)
 	var center: Vector2 = get_camera_center()
 	var half_view := Vector2(W * 0.5, H * 0.5)
@@ -658,22 +668,63 @@ func spawn_enemy_data(data: EnemyData) -> void:
 	enemy.ability_clock = 3.5
 	enemy.phase_two = false
 	enemy.facing = -1.0 if player_pos.x < enemy.pos.x else 1.0
+	enemy.role_title = ""
+	if data.id == "ispettore":
+		enemy.role_title = "CARDIOLOGO" if rng.randi_range(0, 1) == 0 else "DIETOLOGO"
 	enemies.append(enemy)
+	return enemy
 
 func endless_wave() -> int:
-	return 1 + floori(endless_elapsed / 60.0)
+	return wave_number
 
-func update_inspector_arrival() -> void:
-	if endless_mode:
-		if endless_elapsed >= next_endless_inspector_at and not has_inspector():
-			spawn_enemy_data(enemy_catalog[2])
-			add_floating_text("ARRIVA L'ISPETTORE!", player_pos + Vector2(0, -100), Color("#ffb84d"))
-			next_endless_inspector_at = endless_elapsed + ENDLESS_INSPECTOR_INTERVAL
+func begin_wave(number: int) -> void:
+	wave_number = number
+	wave_active = true
+	wave_time_remaining = WAVE_ACTIVE_DURATION
+	wave_break_remaining = 0.0
+	wave_spawned = 0
+	wave_is_special = number % 3 == 0
+	if wave_is_special:
+		# The specialist is the focus: only a small escort is spawned.
+		var escort_target: int = 2 + floori(float(zone_index) / 2.0) if not endless_mode else 3 + floori(float(number) / 3.0)
+		var existing_normal_enemies := 0
+		for active_enemy in enemies:
+			if String(active_enemy.data.id) != "ispettore":
+				existing_normal_enemies += 1
+		wave_spawn_budget = maxi(0, escort_target - existing_normal_enemies)
+		if not has_inspector():
+			var specialist: Dictionary = spawn_enemy_data(enemy_catalog[2])
+			add_floating_text("ARRIVA IL %s!" % String(specialist.role_title), player_pos + Vector2(0, -125), Color("#ffb84d"))
+	else:
+		wave_spawn_budget = 5 + zone_index * 2 + (number - 1) * 2 + difficulty_tier
+		if endless_mode:
+			wave_spawn_budget = 8 + number * 2 + difficulty_tier
+	spawn_clock = 0.55
+	add_floating_text("ONDA %d" % number, player_pos + Vector2(0, -90), Color("#fff06a"))
+
+func update_wave_director(delta: float) -> void:
+	if wave_active:
+		wave_time_remaining = maxf(0.0, wave_time_remaining - delta)
+		spawn_clock -= delta
+		if spawn_clock <= 0.0 and wave_spawned < wave_spawn_budget:
+			var enemy_limit: int = 70 if endless_mode else 55
+			if enemies.size() < enemy_limit:
+				spawn_enemy()
+				wave_spawned += 1
+			var remaining_spawns: int = maxi(1, wave_spawn_budget - wave_spawned)
+			spawn_clock = maxf(0.58, wave_time_remaining / float(remaining_spawns + 1))
+		if wave_time_remaining <= 0.0:
+			wave_active = false
+			wave_break_remaining = WAVE_BREAK_DURATION
+			add_floating_text("RESPIRO!", player_pos + Vector2(0, -90), Color("#bfe8ff"))
 		return
-	if not inspector_spawned_this_zone and zone_remaining <= INSPECTOR_TRIGGER_REMAINING:
-		spawn_enemy_data(enemy_catalog[2])
-		add_floating_text("ARRIVA L'ISPETTORE!", player_pos + Vector2(0, -100), Color("#ffb84d"))
-		inspector_spawned_this_zone = true
+	wave_break_remaining = maxf(0.0, wave_break_remaining - delta)
+	if wave_break_remaining > 0.0:
+		return
+	if not endless_mode and wave_number >= WAVES_PER_ZONE:
+		finish_zone()
+	else:
+		begin_wave(wave_number + 1)
 
 func has_inspector() -> bool:
 	for enemy in enemies:
@@ -725,9 +776,13 @@ func projectile_kind_for_shot(shot: int) -> String:
 func spawn_food_projectile(kind: String, direction: Vector2) -> void:
 	var projectile: Dictionary = acquire_projectile()
 	var polenta_level: int = int(recipe_levels.get("polenta", 0))
+	var vitello_level: int = int(weapon_upgrade_levels.get("vitello_tonnato", 0))
+	var purgatorio_level: int = int(weapon_upgrade_levels.get("uova_purgatorio", 0))
+	var aglione_level: int = int(weapon_upgrade_levels.get("spaghetti_aglione", 0))
+	var kegiorg_level: int = int(weapon_upgrade_levels.get("kegiorg", 0))
 	projectile.kind = kind
 	projectile.pos = player_pos
-	projectile.velocity = direction * (460.0 + 35.0 * polenta_level)
+	projectile.velocity = direction * (460.0 + 35.0 * polenta_level) * (1.0 + 0.08 * aglione_level)
 	projectile.life = 1.75
 	projectile.spin_offset = rng.randi_range(0, 3)
 	projectile.hit_uids = []
@@ -749,6 +804,11 @@ func spawn_food_projectile(kind: String, direction: Vector2) -> void:
 			projectile.damage = 17.0 + difficulty_tier * 5.0 + 8.0 * polenta_level
 			projectile.radius = 12.0 + difficulty_tier * 2.0 + 3.0 * polenta_level
 			projectile.hits_left = 1
+	projectile.damage *= 1.0 + 0.20 * vitello_level
+	projectile.hits_left = int(projectile.hits_left) + kegiorg_level
+	if purgatorio_level > 0:
+		projectile.splash_radius = maxf(float(projectile.splash_radius), 42.0 + 10.0 * purgatorio_level)
+		projectile.splash_damage = maxf(float(projectile.splash_damage), float(projectile.damage) * (0.22 + 0.06 * purgatorio_level))
 	if difficulty_tier >= 4:
 		projectile.damage *= 1.18
 	if recipe_evolution_choices.get("polenta", "") == "polenta_gigante":
@@ -803,7 +863,7 @@ func update_enemies(delta: float) -> void:
 				var health_ratio: float = float(enemy.hp) / maxf(1.0, float(enemy.max_hp))
 				if health_ratio <= 0.5 and not bool(enemy.phase_two):
 					enemy.phase_two = true
-					add_floating_text("ISPEZIONE SEVERA!", enemy.pos + Vector2(0, -90), Color("#ff6b57"))
+					add_floating_text("CONTROLLO SEVERO!", enemy.pos + Vector2(0, -90), Color("#ff6b57"))
 				if bool(enemy.phase_two):
 					movement_multiplier = 1.28
 				enemy.ability_clock = float(enemy.get("ability_clock", 2.0)) - delta
@@ -872,6 +932,7 @@ func update_drops(delta: float) -> void:
 		drop.life -= delta
 		if drop.pos.distance_to(player_pos) < 46.0:
 			inventory[drop.kind] = int(inventory.get(drop.kind, 0)) + 1
+			collected_drops += 1
 			score += 12
 			progress_objective("collect", String(drop.kind))
 			add_floating_text("+%s" % INGREDIENT_LABELS.get(drop.kind, drop.kind), drop.pos, Color("#d8ee7a"))
@@ -1100,13 +1161,13 @@ func advance_to_next_zone() -> void:
 	if endless_mode:
 		endless_elapsed = 0.0
 		endless_score_clock = 0.0
-		next_endless_inspector_at = ENDLESS_INSPECTOR_INTERVAL
 		score += 1000
-		next_modifier_wave = 2
+		next_modifier_wave = 3
 	spawn_clock = 1.0
 	state = GameState.PLAYING
 	clear_overlay()
 	setup_zone_objective()
+	begin_wave(1)
 	AudioManager.play_sfx("cucina")
 	update_hud()
 
@@ -1167,7 +1228,7 @@ func objective_text() -> String:
 		"kill_ladro": label = "Ferma i ladri"
 		"kill_any": label = "Sconfiggi gli ospiti"
 		"collect_guanciale": label = "Raccogli guanciale"
-		"kill_ispettore": label = "Supera l'ispezione"
+		"kill_ispettore": label = "Supera il controllo"
 	if objective_completed:
 		return "✓ %s completato" % label
 	return "%s: %d/%d" % [label, objective_progress, objective_target]
@@ -1180,8 +1241,50 @@ func synergy_text() -> String:
 		synergies.append("SCHIZZO")
 	return "-" if synergies.is_empty() else "+".join(synergies)
 
+func show_weapon_upgrade_choice() -> void:
+	state = GameState.WEAPON_CHOICE
+	joystick_touch = -1
+	joystick_vector = Vector2.ZERO
+	clear_overlay()
+	var choices: Array = weapon_upgrade_catalog.duplicate()
+	choices.shuffle()
+	var panel := make_panel(Rect2(48, 235, 624, 790), Color("#34243d"), Color("#f3d47c"))
+	overlay.add_child(panel)
+	var heading := make_label(Vector2(24, 24), Vector2(576, 58), 31)
+	heading.text = "LA DISPENSA ISPIRA!"
+	panel.add_child(heading)
+	var note := make_label(Vector2(38, 82), Vector2(548, 54), 16)
+	note.text = "Scegli come trasformare i prossimi lanci."
+	panel.add_child(note)
+	for index in range(mini(3, choices.size())):
+		var upgrade: Dictionary = choices[index]
+		var current_level: int = int(weapon_upgrade_levels.get(String(upgrade.id), 0))
+		var card := make_panel(Rect2(34, 148 + index * 184, 556, 158), Color("#4b3153"), Color("#d49a55"))
+		panel.add_child(card)
+		var title := make_label(Vector2(16, 10), Vector2(524, 36), 21)
+		title.text = "%s  Lv.%d" % [String(upgrade.name), current_level + 1]
+		card.add_child(title)
+		var description := make_label(Vector2(24, 50), Vector2(508, 48), 15)
+		description.text = String(upgrade.description)
+		description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		card.add_child(description)
+		var choose := make_button("PREPARA", Rect2(170, 108, 216, 42), 17)
+		choose.pressed.connect(select_weapon_upgrade.bind(String(upgrade.id)))
+		card.add_child(choose)
+
+func select_weapon_upgrade(upgrade_id: String) -> void:
+	weapon_upgrade_levels[upgrade_id] = int(weapon_upgrade_levels.get(upgrade_id, 0)) + 1
+	var total_upgrades := 0
+	for level in weapon_upgrade_levels.values():
+		total_upgrades += int(level)
+	next_weapon_upgrade_at += 5 + total_upgrades * 2
+	score += 150
+	state = GameState.PLAYING
+	clear_overlay()
+	add_floating_text("RICETTA POTENZIATA!", player_pos + Vector2(0, -85), Color("#fff06a"))
+
 func show_endless_modifier_choice() -> void:
-	next_modifier_wave = endless_wave() + 1
+	next_modifier_wave = endless_wave() + 2
 	var available: Array = []
 	for modifier in endless_modifier_catalog:
 		if String(modifier.id) not in active_endless_modifiers:
@@ -1390,19 +1493,25 @@ func update_hud() -> void:
 	if state != GameState.PLAYING:
 		return
 	if endless_mode:
-		hud_labels.zone.text = "∞ %s - ONDA %d" % [ZONES[zone_index], endless_wave()]
+		hud_labels.zone.text = "INFINITA - ONDA %d%s" % [endless_wave(), " SPECIALE" if wave_is_special else ""]
 		var infinite_seconds := int(endless_elapsed)
 		hud_labels.timer.text = "%02d:%02d" % [floori(infinite_seconds / 60.0), infinite_seconds % 60]
 	else:
-		hud_labels.zone.text = "%d/%d %s - %s" % [zone_index + 1, FINITE_ZONE_COUNT, ZONES[zone_index], DIFFICULTY_NAMES[difficulty_tier]]
+		hud_labels.zone.text = "%d/%d %s - ONDA %d/%d" % [zone_index + 1, FINITE_ZONE_COUNT, ZONES[zone_index], wave_number, WAVES_PER_ZONE]
 		var remaining_seconds := int(maxf(0.0, zone_remaining))
 		hud_labels.timer.text = "%02d:%02d" % [floori(remaining_seconds / 60.0), remaining_seconds % 60]
 	hud_labels.health.text = "VITA %d / %d" % [int(player_health), int(player_max_health)]
 	hud_labels.score.text = "PUNTI %d - KO %d%s" % [score, kills, " x%d" % kill_combo if kill_combo >= 3 else ""]
-	hud_labels.objective.text = objective_text()
+	var wave_status := "ONDA"
+	if not wave_active:
+		wave_status = "RESPIRO %ds" % ceili(wave_break_remaining)
+	elif wave_is_special:
+		wave_status = "SPECIALISTA"
+	hud_labels.objective.text = "[%s] %s" % [wave_status, objective_text()]
 	var compact := ""
-	for key in ["guanciale", "olio", "formaggio", "vino"]:
+	for key in ["guanciale", "olio"]:
 		compact += "%s:%d  " % [INGREDIENT_LABELS[key].left(3), int(inventory.get(key, 0))]
+	compact += "UPG:%d/%d" % [collected_drops, next_weapon_upgrade_at]
 	hud_labels.pantry.text = compact.strip_edges()
 	dash_button.text = "SCATTO" if elapsed_run >= dash_ready_at else "ATTENDI"
 
@@ -1752,8 +1861,8 @@ func draw_human_enemy(enemy: Dictionary) -> void:
 		var bar_position: Vector2 = enemy.pos + Vector2(-58, -112)
 		draw_rect(Rect2(bar_position, Vector2(116, 12)), Color("#33231d"))
 		draw_rect(Rect2(bar_position + Vector2(2, 2), Vector2(112 * health_ratio, 8)), Color("#d34d39"))
-		draw_rect(Rect2(enemy.pos + Vector2(-43, -135), Vector2(86, 19)), Color("#f4f0dc"))
-		draw_string(ThemeDB.fallback_font, enemy.pos + Vector2(-38, -120), "ISPETTORE", HORIZONTAL_ALIGNMENT_CENTER, 76, 13, Color("#33231d"))
+		draw_rect(Rect2(enemy.pos + Vector2(-58, -135), Vector2(116, 19)), Color("#f4f0dc"))
+		draw_string(ThemeDB.fallback_font, enemy.pos + Vector2(-53, -120), String(enemy.get("role_title", "DIETOLOGO")), HORIZONTAL_ALIGNMENT_CENTER, 106, 13, Color("#33231d"))
 	if enemy.hit_flash > 0.0:
 		draw_arc(enemy.pos, enemy.data.radius + 5.0, 0.0, TAU, 12, Color.WHITE, 2.0)
 
