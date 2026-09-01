@@ -23,6 +23,7 @@ boot_splash/bg_color=Color(0.12, 0.18, 0.11, 1)
 
 RunState="*res://scripts/autoload/run_state.gd"
 SaveData="*res://scripts/autoload/save_data.gd"
+OnlineLeaderboard="*res://scripts/autoload/online_leaderboard.gd"
 AudioManager="*res://scripts/autoload/audio_manager.gd"
 
 [display]

@@ -150,9 +150,14 @@ var dash_button: Button
 var hud_labels := {}
 var was_new_best := false
 var world_camera: Camera2D
+var registration_name_input: LineEdit
+var online_status_label: Label
+var global_leaderboard_open := false
 
 func _ready() -> void:
 	rng.randomize()
+	OnlineLeaderboard.registration_completed.connect(_on_online_registration_completed)
+	OnlineLeaderboard.leaderboard_loaded.connect(_on_global_leaderboard_loaded)
 	world_camera = Camera2D.new()
 	world_camera.position = player_pos
 	world_camera.position_smoothing_enabled = true
@@ -161,6 +166,8 @@ func _ready() -> void:
 	world_camera.make_current()
 	build_interface()
 	show_menu()
+	if OnlineLeaderboard.is_configured() and not OnlineLeaderboard.has_identity():
+		call_deferred("show_username_registration")
 	queue_redraw()
 
 func _process(delta: float) -> void:
@@ -286,6 +293,7 @@ func clear_overlay() -> void:
 
 func show_menu() -> void:
 	state = GameState.MENU
+	global_leaderboard_open = false
 	hud.visible = false
 	clear_overlay()
 	var panel := make_panel(Rect2(48, 210, 624, 800), Color("#26391f"), Color("#f3d47c"))
@@ -294,26 +302,149 @@ func show_menu() -> void:
 	title.text = "GIORGIONE'S\nFEAST"
 	title.add_theme_color_override("font_color", Color("#f5cb56"))
 	panel.add_child(title)
-	var subtitle := make_label(Vector2(52, 174), Vector2(520, 110), 21)
+	var subtitle := make_label(Vector2(52, 158), Vector2(520, 90), 20)
 	subtitle.text = "Cinque scenari, miniboss e Sagra Infinita.\nRaccogli, cucina e conquista la classifica."
 	panel.add_child(subtitle)
-	var start := make_button("INIZIA LA SAGRA", Rect2(78, 310, 468, 74), 25)
+	var start := make_button("INIZIA LA SAGRA", Rect2(78, 260, 468, 68), 24)
 	start.pressed.connect(start_run)
 	panel.add_child(start)
-	var leaderboard_button := make_button("CLASSIFICA LOCALE", Rect2(78, 410, 468, 68), 21)
+	var leaderboard_button := make_button("CLASSIFICA LOCALE", Rect2(78, 345, 468, 58), 19)
 	leaderboard_button.pressed.connect(show_leaderboard)
 	panel.add_child(leaderboard_button)
-	var best := make_label(Vector2(58, 500), Vector2(508, 45), 19)
+	var global_button := make_button("CLASSIFICA MONDIALE", Rect2(78, 420, 468, 58), 19)
+	global_button.disabled = not OnlineLeaderboard.is_configured()
+	global_button.pressed.connect(show_global_leaderboard)
+	panel.add_child(global_button)
+	var identity_text := "REGISTRA NOME GIOCATORE"
+	if OnlineLeaderboard.has_identity():
+		identity_text = "GIOCATORE: %s" % OnlineLeaderboard.current_username().to_upper()
+	elif not OnlineLeaderboard.is_configured():
+		identity_text = "CONFIGURA CLASSIFICA ONLINE"
+	var identity_button := make_button(identity_text, Rect2(78, 495, 468, 58), 18)
+	identity_button.pressed.connect(show_username_registration)
+	panel.add_child(identity_button)
+	var best := make_label(Vector2(58, 570), Vector2(508, 45), 18)
 	best.text = "Miglior cena: %d punti" % int(SaveData.data.best_score)
 	panel.add_child(best)
-	var note := make_label(Vector2(48, 620), Vector2(528, 84), 14)
+	var note := make_label(Vector2(48, 655), Vector2(528, 84), 14)
 	note.text = "Opera fan non ufficiale.\nTocca e trascina a sinistra per muoverti."
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	note.add_theme_color_override("font_color", Color("#d4e0bd"))
 	panel.add_child(note)
 
+func show_username_registration() -> void:
+	state = GameState.LEADERBOARD
+	global_leaderboard_open = false
+	hud.visible = false
+	clear_overlay()
+	var panel := make_panel(Rect2(70, 300, 580, 650), Color("#26391f"), Color("#f3d47c"))
+	overlay.add_child(panel)
+	var heading := make_label(Vector2(25, 28), Vector2(530, 65), 31)
+	heading.text = "GIOCATORE ONLINE"
+	panel.add_child(heading)
+	var explanation := make_label(Vector2(45, 105), Vector2(490, 90), 17)
+	explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	if OnlineLeaderboard.has_identity():
+		explanation.text = "Registrato come %s. Il nome resta salvato su questo dispositivo." % OnlineLeaderboard.current_username()
+	else:
+		explanation.text = "Inserisci un nome. Se esiste già verrà selezionato; altrimenti sarà creato."
+	panel.add_child(explanation)
+	registration_name_input = LineEdit.new()
+	registration_name_input.position = Vector2(65, 220)
+	registration_name_input.size = Vector2(450, 62)
+	registration_name_input.placeholder_text = "Nome giocatore (3-20 caratteri)"
+	registration_name_input.text = OnlineLeaderboard.current_username()
+	registration_name_input.max_length = 20
+	registration_name_input.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	registration_name_input.add_theme_font_size_override("font_size", 20)
+	panel.add_child(registration_name_input)
+	online_status_label = make_label(Vector2(55, 295), Vector2(470, 65), 16)
+	online_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	online_status_label.text = "" if OnlineLeaderboard.is_configured() else "Completa prima online/leaderboard_config.json."
+	panel.add_child(online_status_label)
+	var confirm := make_button("USA QUESTO NOME", Rect2(85, 380, 410, 62), 20)
+	confirm.disabled = not OnlineLeaderboard.is_configured()
+	confirm.pressed.connect(submit_username_registration)
+	panel.add_child(confirm)
+	if OnlineLeaderboard.has_identity():
+		var reset := make_button("DIMENTICA GIOCATORE", Rect2(85, 460, 410, 58), 17)
+		reset.pressed.connect(reset_online_identity)
+		panel.add_child(reset)
+	var back := make_button("TORNA AL MENU", Rect2(125, 545, 330, 58), 18)
+	back.pressed.connect(show_menu)
+	panel.add_child(back)
+	registration_name_input.grab_focus()
+
+func submit_username_registration() -> void:
+	if registration_name_input == null or online_status_label == null:
+		return
+	online_status_label.text = "Connessione..."
+	OnlineLeaderboard.register_username(registration_name_input.text)
+
+func reset_online_identity() -> void:
+	SaveData.clear_online_identity()
+	show_menu()
+
+func _on_online_registration_completed(success: bool, message: String) -> void:
+	if success:
+		show_menu()
+	elif online_status_label != null and is_instance_valid(online_status_label):
+		online_status_label.text = message
+
+func show_global_leaderboard() -> void:
+	state = GameState.LEADERBOARD
+	global_leaderboard_open = true
+	hud.visible = false
+	render_global_leaderboard([], "Caricamento classifica...")
+	OnlineLeaderboard.fetch_global_leaderboard()
+
+func _on_global_leaderboard_loaded(success: bool, entries: Array, message: String) -> void:
+	if state != GameState.LEADERBOARD or not global_leaderboard_open:
+		return
+	render_global_leaderboard(entries if success else [], message)
+
+func render_global_leaderboard(entries: Array, message: String) -> void:
+	clear_overlay()
+	var panel := make_panel(Rect2(38, 135, 644, 990), Color("#26391f"), Color("#f3d47c"))
+	overlay.add_child(panel)
+	var heading := make_label(Vector2(25, 28), Vector2(594, 68), 34)
+	heading.text = "CLASSIFICA MONDIALE"
+	heading.add_theme_color_override("font_color", Color("#f5cb56"))
+	panel.add_child(heading)
+	var identity := make_label(Vector2(35, 92), Vector2(574, 34), 15)
+	identity.text = "Giocatore: %s" % (OnlineLeaderboard.current_username() if OnlineLeaderboard.has_identity() else "non registrato")
+	panel.add_child(identity)
+	var header := make_label(Vector2(30, 135), Vector2(584, 35), 15, HORIZONTAL_ALIGNMENT_LEFT)
+	header.text = "POS  NOME                 PUNTI       KO     INF."
+	header.add_theme_color_override("font_color", Color("#d4e0bd"))
+	panel.add_child(header)
+	if entries.is_empty():
+		var status := make_label(Vector2(50, 230), Vector2(544, 100), 19)
+		status.text = message if not message.is_empty() else "Nessun punteggio online."
+		status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		panel.add_child(status)
+	else:
+		for index in range(mini(12, entries.size())):
+			var entry: Dictionary = entries[index]
+			var endless_seconds := int(entry.get("endless_seconds", 0))
+			var endless_text := "--"
+			if endless_seconds > 0:
+				endless_text = "%02d:%02d" % [floori(endless_seconds / 60.0), endless_seconds % 60]
+			var row := make_label(Vector2(30, 178 + index * 54), Vector2(584, 44), 16, HORIZONTAL_ALIGNMENT_LEFT)
+			row.text = "%2d.  %-18s %8d   %4d   %s" % [
+				int(entry.get("rank", index + 1)), String(entry.get("username", "?")).left(18),
+				int(entry.get("best_score", 0)), int(entry.get("kills", 0)), endless_text,
+			]
+			if String(entry.get("username", "")).nocasecmp_to(OnlineLeaderboard.current_username()) == 0:
+				row.add_theme_color_override("font_color", Color("#f5cb56"))
+			panel.add_child(row)
+	var back := make_button("TORNA AL MENU", Rect2(102, 870, 440, 66), 21)
+	back.pressed.connect(show_menu)
+	panel.add_child(back)
+
 func show_leaderboard() -> void:
 	state = GameState.LEADERBOARD
+	global_leaderboard_open = false
 	hud.visible = false
 	clear_overlay()
 	var panel := make_panel(Rect2(48, 150, 624, 950), Color("#26391f"), Color("#f3d47c"))
@@ -1169,6 +1300,7 @@ func show_dinner() -> void:
 	RunState.score = score
 	if not score_recorded:
 		was_new_best = SaveData.record_run(score, kills, mini(zone_index, FINITE_ZONE_COUNT), int(endless_elapsed))
+		submit_online_run()
 		score_recorded = true
 	var panel := make_panel(Rect2(42, 220, 636, 760), Color("#38291d"), Color("#f3d47c"))
 	overlay.add_child(panel)
@@ -1196,6 +1328,7 @@ func show_game_over() -> void:
 	RunState.score = score
 	if not score_recorded:
 		was_new_best = SaveData.record_run(score, kills, mini(zone_index, FINITE_ZONE_COUNT), int(endless_elapsed))
+		submit_online_run()
 		score_recorded = true
 	clear_overlay()
 	var panel := make_panel(Rect2(66, 340, 588, 520), Color("#3e261d"), Color("#f3d47c"))
@@ -1218,6 +1351,10 @@ func toggle_pause() -> void:
 		show_pause()
 	elif state == GameState.PAUSED:
 		resume_game()
+
+func submit_online_run() -> void:
+	if OnlineLeaderboard.has_identity():
+		OnlineLeaderboard.submit_score(score, kills, mini(zone_index, FINITE_ZONE_COUNT), int(endless_elapsed))
 
 func show_pause() -> void:
 	if state != GameState.PLAYING:
