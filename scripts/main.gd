@@ -18,14 +18,14 @@ const WAVE_BREAK_DURATION := 8.0
 const CAPRESE_HEAL_CAP := 0.75
 const CAPRESE_ABUNDANT_HEAL_CAP := 0.85
 const OBJECTIVE_HEAL := 8.0
-const CHEF_IDLE_TEXTURE: Texture2D = preload("res://assets/sprites/chef_walk_v3.png")
+const CHEF_IDLE_TEXTURE: Texture2D = preload("res://assets/sprites/chef_walk_v4.png")
 const CHEF_ATTACK_TEXTURE: Texture2D = preload("res://assets/sprites/chef_attack_butter_v2.png")
 const BUTTER_PROJECTILE_TEXTURE: Texture2D = preload("res://assets/sprites/butter_projectile_v1.png")
 const FRITTATA_PROJECTILE_TEXTURE: Texture2D = preload("res://assets/sprites/frittata_projectile_v1.png")
 const BRUSCHETTA_PROJECTILE_TEXTURE: Texture2D = preload("res://assets/sprites/bruschetta_projectile_v1.png")
-const ENEMY_ISPETTORE_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_ispettore_walk_v3.png")
-const ENEMY_TURISTA_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_turista_walk_v3.png")
-const ENEMY_LADRO_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_ladro_walk_v3.png")
+const ENEMY_ISPETTORE_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_ispettore_walk_v4.png")
+const ENEMY_TURISTA_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_turista_walk_v4.png")
+const ENEMY_LADRO_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_ladro_walk_v4.png")
 const ENEMY_ISPETTORE_DEATH_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_ispettore_death_v2.png")
 const ENEMY_TURISTA_DEATH_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_turista_death_v2.png")
 const ENEMY_LADRO_DEATH_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_ladro_death_v2.png")
@@ -35,7 +35,8 @@ const DROP_OLIO_TEXTURE: Texture2D = preload("res://assets/sprites/drop_olio_v1.
 const CHEF_FRAME_SIZE := Vector2(128, 128)
 const CHEF_ANIMATION_FRAMES := 8
 const CHEF_DRAW_SIZE := 124.0
-const CHEF_ATTACK_DURATION := 0.48
+const CHEF_ATTACK_DURATION := 0.28
+const WALK_ANIMATION_FPS := 8.0
 const ENEMY_COLLISION_SCALE := 1.14
 const DIFFICULTY_THRESHOLDS := [0, 10, 25, 45, 70]
 const DIFFICULTY_NAMES := ["ASSAGGIO", "BIS", "ABBONDANZA", "LAIDA", "LAIDA E CORROTTA"]
@@ -686,7 +687,7 @@ func begin_wave(number: int) -> void:
 	wave_is_special = number % 3 == 0
 	if wave_is_special:
 		# The specialist is the focus: only a small escort is spawned.
-		var escort_target: int = 2 + floori(float(zone_index) / 2.0) if not endless_mode else 3 + floori(float(number) / 3.0)
+		var escort_target: int = 3 + floori(float(zone_index) / 2.0) if not endless_mode else 4 + floori(float(number) / 3.0)
 		var existing_normal_enemies := 0
 		for active_enemy in enemies:
 			if String(active_enemy.data.id) != "ispettore":
@@ -696,9 +697,9 @@ func begin_wave(number: int) -> void:
 			var specialist: Dictionary = spawn_enemy_data(enemy_catalog[2])
 			add_floating_text("ARRIVA IL %s!" % String(specialist.role_title), player_pos + Vector2(0, -125), Color("#ffb84d"))
 	else:
-		wave_spawn_budget = 5 + zone_index * 2 + (number - 1) * 2 + difficulty_tier
+		wave_spawn_budget = 8 + zone_index * 2 + (number - 1) * 2 + difficulty_tier
 		if endless_mode:
-			wave_spawn_budget = 8 + number * 2 + difficulty_tier
+			wave_spawn_budget = 10 + number * 2 + difficulty_tier
 	spawn_clock = 0.55
 	add_floating_text("ONDA %d" % number, player_pos + Vector2(0, -90), Color("#fff06a"))
 
@@ -1664,8 +1665,10 @@ func draw_player() -> void:
 		draw_circle(blade, 23.0, Color("#9e3d1e"))
 		draw_circle(blade, 15.0, Color("#efad56"))
 	var texture := CHEF_IDLE_TEXTURE
-	var frame := floori(elapsed_run * 10.0) % CHEF_ANIMATION_FRAMES if player_is_moving else 0
-	if attack_animation_time > 0.0:
+	var walk_phase: float = elapsed_run * WALK_ANIMATION_FPS
+	var frame := floori(walk_phase) % CHEF_ANIMATION_FRAMES if player_is_moving else 0
+	# Keep locomotion readable while moving; show the full throw animation when stationary.
+	if attack_animation_time > 0.0 and not player_is_moving:
 		texture = CHEF_ATTACK_TEXTURE
 		var attack_progress := 1.0 - attack_animation_time / CHEF_ATTACK_DURATION
 		frame = clampi(floori(attack_progress * float(CHEF_ANIMATION_FRAMES)), 0, CHEF_ANIMATION_FRAMES - 1)
@@ -1677,7 +1680,10 @@ func draw_player() -> void:
 	var modulation := Color.WHITE
 	if player_invulnerable > 0.0 and int(player_invulnerable * 20.0) % 2 == 0:
 		modulation.a = 0.45
-	draw_set_transform(player_pos, 0.0, Vector2(player_facing, 1.0))
+	var walk_cycle: float = walk_phase / float(CHEF_ANIMATION_FRAMES) * TAU
+	var walk_bob := -absf(sin(walk_cycle)) * 3.5 if player_is_moving else 0.0
+	var walk_lean := sin(walk_cycle) * 0.025 if player_is_moving else 0.0
+	draw_set_transform(player_pos + Vector2(0, walk_bob), walk_lean * player_facing, Vector2(player_facing, 1.0))
 	draw_texture_rect_region(texture, destination, source, modulation)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
@@ -1843,7 +1849,7 @@ func draw_human_enemy(enemy: Dictionary) -> void:
 			texture = ENEMY_LADRO_TEXTURE
 			draw_size = 128.0
 	draw_size *= float(enemy.get("visual_scale", 1.0))
-	var phase: float = elapsed_run * 10.0 + float(enemy.pos.x) * 0.013
+	var phase: float = elapsed_run * WALK_ANIMATION_FPS + float(int(enemy.get("uid", 0)) % ENEMY_ANIMATION_FRAMES) * 0.65
 	var frame: int = floori(phase) % ENEMY_ANIMATION_FRAMES
 	var source: Rect2 = Rect2(Vector2(frame * 128, 0), CHEF_FRAME_SIZE)
 	var size: Vector2 = Vector2(draw_size, draw_size)
@@ -1852,8 +1858,11 @@ func draw_human_enemy(enemy: Dictionary) -> void:
 	if enemy.hit_flash > 0.0:
 		modulation = Color(1.0, 0.58, 0.58, 1.0)
 	var facing: float = float(enemy.get("facing", 1.0))
+	var walk_cycle: float = phase / float(ENEMY_ANIMATION_FRAMES) * TAU
+	var walk_bob := -absf(sin(walk_cycle)) * 3.0
+	var walk_lean := sin(walk_cycle) * 0.022
 	destination.position -= enemy.pos
-	draw_set_transform(enemy.pos, 0.0, Vector2(facing, 1.0))
+	draw_set_transform(enemy.pos + Vector2(0, walk_bob), walk_lean * facing, Vector2(facing, 1.0))
 	draw_texture_rect_region(texture, destination, source, modulation)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	if String(enemy.data.id) == "ispettore":
