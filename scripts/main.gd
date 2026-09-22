@@ -21,8 +21,10 @@ const OBJECTIVE_HEAL := 8.0
 const CHEF_IDLE_TEXTURE: Texture2D = preload("res://assets/sprites/chef_walk_v4.png")
 const CHEF_ATTACK_TEXTURE: Texture2D = preload("res://assets/sprites/chef_attack_butter_v2.png")
 const BUTTER_PROJECTILE_TEXTURE: Texture2D = preload("res://assets/sprites/butter_projectile_v1.png")
-const FRITTATA_PROJECTILE_TEXTURE: Texture2D = preload("res://assets/sprites/frittata_projectile_v1.png")
-const BRUSCHETTA_PROJECTILE_TEXTURE: Texture2D = preload("res://assets/sprites/bruschetta_projectile_v1.png")
+const VITELLO_PROJECTILE_TEXTURE: Texture2D = preload("res://assets/sprites/weapon_vitello_tonnato_v1.png")
+const UOVA_PROJECTILE_TEXTURE: Texture2D = preload("res://assets/sprites/weapon_uova_purgatorio_v1.png")
+const SPAGHETTI_PROJECTILE_TEXTURE: Texture2D = preload("res://assets/sprites/weapon_spaghetti_aglione_v1.png")
+const KEGIORG_PROJECTILE_TEXTURE: Texture2D = preload("res://assets/sprites/weapon_kegiorg_v1.png")
 const ENEMY_ISPETTORE_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_ispettore_walk_v4.png")
 const ENEMY_TURISTA_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_turista_walk_v4.png")
 const ENEMY_LADRO_TEXTURE: Texture2D = preload("res://assets/sprites/enemy_ladro_walk_v4.png")
@@ -92,10 +94,10 @@ var endless_modifier_catalog := [
 	{"id": "pioggia_burro", "name": "Pioggia di Burro", "description": "Raffica radiale automatica, più nemici."},
 ]
 var weapon_upgrade_catalog := [
-	{"id": "vitello_tonnato", "name": "Vitello Tonnato Volante", "description": "+20% danno a tutti i proiettili."},
-	{"id": "uova_purgatorio", "name": "Uova in Purgatorio", "description": "Gli impatti esplodono in un'area sempre piu grande."},
-	{"id": "spaghetti_aglione", "name": "Spaghetti all'Aglione", "description": "+10% cadenza e +8% velocita dei proiettili."},
-	{"id": "kegiorg", "name": "KeGiorg Rotante", "description": "I proiettili attraversano un nemico aggiuntivo."},
+	{"id": "vitello_tonnato", "name": "Vitello Tonnato Volante", "description": "Colpo pesante: ogni livello aumenta danno e dimensione."},
+	{"id": "uova_purgatorio", "name": "Uova in Purgatorio", "description": "Colpo esplosivo: ogni livello amplia area e danno."},
+	{"id": "spaghetti_aglione", "name": "Spaghetti all'Aglione", "description": "Colpo rapido: ogni livello aumenta velocita e perforazione."},
+	{"id": "kegiorg", "name": "KeGiorg Rotante", "description": "Colpo rotante: ogni livello aggiunge danno e un bersaglio."},
 ]
 
 var state := GameState.MENU
@@ -585,10 +587,11 @@ func update_play(delta: float) -> void:
 	update_wave_director(delta)
 	attack_clock -= delta
 	if attack_clock <= 0.0:
-		auto_attack()
-		var aglione_level: int = int(weapon_upgrade_levels.get("spaghetti_aglione", 0))
-		var weapon_speed_multiplier: float = maxf(0.55, 1.0 - 0.10 * aglione_level)
-		attack_clock = maxf(0.20, (0.68 - 0.08 * int(recipe_levels.get("polenta", 0))) * weapon_speed_multiplier)
+		if auto_attack():
+			attack_clock = maxf(0.24, 0.68 - 0.08 * int(recipe_levels.get("polenta", 0)))
+		else:
+			# Poll quickly without wasting a full firing cooldown while the screen is clear.
+			attack_clock = 0.08
 	update_recipe_effects(delta)
 	update_enemies(delta)
 	update_projectiles(delta)
@@ -647,7 +650,9 @@ func spawn_enemy_data(data: EnemyData) -> Dictionary:
 	enemy.data = data
 	enemy.pos = position
 	var endless_scale := maxf(0.0, float(endless_wave() - 1)) if endless_mode else 0.0
-	enemy.max_hp = data.max_health * (1.0 + difficulty_tier * 0.14 + endless_scale * 0.11)
+	var zone_scale: float = float(zone_index) * 0.08
+	var wave_scale: float = float(maxi(0, wave_number - 1)) * 0.04
+	enemy.max_hp = data.max_health * (1.35 + zone_scale + wave_scale + difficulty_tier * 0.16 + endless_scale * 0.12)
 	enemy.visual_scale = 1.0
 	if "giganti" in active_endless_modifiers:
 		enemy.max_hp *= 1.55
@@ -656,7 +661,7 @@ func spawn_enemy_data(data: EnemyData) -> Dictionary:
 		enemy.max_hp *= 1.35 + minf(0.75, zone_index * 0.12)
 	enemy.hp = enemy.max_hp
 	enemy.speed_scale = 1.0 + difficulty_tier * 0.055 + minf(0.45, endless_scale * 0.035)
-	enemy.damage_scale = 1.0 + difficulty_tier * 0.075 + endless_scale * 0.065
+	enemy.damage_scale = 1.12 + zone_scale * 0.45 + wave_scale * 0.35 + difficulty_tier * 0.085 + endless_scale * 0.07
 	if "doppia_dispensa" in active_endless_modifiers:
 		enemy.speed_scale *= 1.15
 	if "burro_critico" in active_endless_modifiers:
@@ -741,16 +746,18 @@ func acquire_enemy() -> Dictionary:
 func release_enemy(enemy: Dictionary) -> void:
 	enemy_pool.append(enemy)
 
-func auto_attack() -> void:
-	if enemies.is_empty():
-		return
-	var target: Dictionary = enemies[0]
-	var closest: float = player_pos.distance_squared_to(target.pos as Vector2)
+func auto_attack() -> bool:
+	var target: Dictionary = {}
+	var closest := INF
 	for enemy in enemies:
+		if not enemy_is_in_viewport(enemy):
+			continue
 		var distance: float = player_pos.distance_squared_to(enemy.pos as Vector2)
 		if distance < closest:
 			closest = distance
 			target = enemy
+	if target.is_empty():
+		return false
 	var base_direction: Vector2 = (target.pos - player_pos).normalized()
 	var shot_count: int = 2 if difficulty_tier >= 4 else 1
 	if recipe_evolution_choices.get("polenta", "") == "polenta_raffica":
@@ -763,27 +770,29 @@ func auto_attack() -> void:
 	attack_sequence += 1
 	attack_animation_time = CHEF_ATTACK_DURATION
 	AudioManager.play_sfx("burro")
+	return true
+
+func enemy_is_in_viewport(enemy: Dictionary) -> bool:
+	var center: Vector2 = get_camera_center()
+	var visible_rect := Rect2(center - Vector2(W, H) * 0.5, Vector2(W, H))
+	var visual_margin: float = maxf(24.0, float(enemy.data.radius) * float(enemy.get("visual_scale", 1.0)))
+	return visible_rect.grow(visual_margin).has_point(enemy.pos)
 
 func projectile_kind_for_shot(shot: int) -> String:
-	if difficulty_tier >= 4:
-		var unlocked := ["burro", "frittata", "bruschetta"]
-		return unlocked[(attack_sequence + shot) % unlocked.size()]
-	if difficulty_tier >= 3:
-		return "bruschetta"
-	if difficulty_tier >= 2:
-		return "frittata"
-	return "burro"
+	var unlocked: Array[String] = ["burro"]
+	for weapon_id in ["vitello_tonnato", "uova_purgatorio", "spaghetti_aglione", "kegiorg"]:
+		if int(weapon_upgrade_levels.get(weapon_id, 0)) > 0:
+			unlocked.append(weapon_id)
+	return unlocked[(attack_sequence + shot) % unlocked.size()]
 
 func spawn_food_projectile(kind: String, direction: Vector2) -> void:
 	var projectile: Dictionary = acquire_projectile()
 	var polenta_level: int = int(recipe_levels.get("polenta", 0))
-	var vitello_level: int = int(weapon_upgrade_levels.get("vitello_tonnato", 0))
-	var purgatorio_level: int = int(weapon_upgrade_levels.get("uova_purgatorio", 0))
-	var aglione_level: int = int(weapon_upgrade_levels.get("spaghetti_aglione", 0))
-	var kegiorg_level: int = int(weapon_upgrade_levels.get("kegiorg", 0))
+	var weapon_level: int = maxi(1, int(weapon_upgrade_levels.get(kind, 0)))
 	projectile.kind = kind
+	projectile.weapon_level = weapon_level
 	projectile.pos = player_pos
-	projectile.velocity = direction * (460.0 + 35.0 * polenta_level) * (1.0 + 0.08 * aglione_level)
+	projectile.velocity = direction * (460.0 + 30.0 * polenta_level)
 	projectile.life = 1.75
 	projectile.spin_offset = rng.randi_range(0, 3)
 	projectile.hit_uids = []
@@ -791,27 +800,31 @@ func spawn_food_projectile(kind: String, direction: Vector2) -> void:
 	projectile.splash_damage = 0.0
 	projectile.critical = "burro_critico" in active_endless_modifiers and rng.randf() < 0.25
 	match kind:
-		"frittata":
-			projectile.damage = 29.0 + 8.0 * polenta_level
-			projectile.radius = 18.0 + 3.0 * polenta_level
-			projectile.hits_left = 2
-		"bruschetta":
-			projectile.damage = 38.0 + 9.0 * polenta_level
-			projectile.radius = 20.0 + 3.0 * polenta_level
+		"vitello_tonnato":
+			projectile.damage = 30.0 + 9.0 * (weapon_level - 1) + 6.0 * polenta_level
+			projectile.radius = 18.0 + 2.0 * weapon_level + 2.0 * polenta_level
 			projectile.hits_left = 1
-			projectile.splash_radius = 76.0 + 5.0 * polenta_level
-			projectile.splash_damage = 17.0 + 5.0 * polenta_level
+		"uova_purgatorio":
+			projectile.damage = 19.0 + 5.0 * weapon_level + 5.0 * polenta_level
+			projectile.radius = 15.0 + 1.5 * weapon_level + 2.0 * polenta_level
+			projectile.hits_left = 1
+			projectile.splash_radius = 52.0 + 10.0 * weapon_level + 4.0 * polenta_level
+			projectile.splash_damage = 11.0 + 6.0 * weapon_level + 4.0 * polenta_level
+		"spaghetti_aglione":
+			projectile.damage = 17.0 + 5.0 * weapon_level + 5.0 * polenta_level
+			projectile.radius = 14.0 + 1.5 * weapon_level + 2.0 * polenta_level
+			projectile.hits_left = 1 + ceili(float(weapon_level) / 2.0)
+			projectile.velocity *= 1.25 + 0.08 * weapon_level
+		"kegiorg":
+			projectile.damage = 23.0 + 7.0 * weapon_level + 5.0 * polenta_level
+			projectile.radius = 18.0 + 2.0 * weapon_level + 2.0 * polenta_level
+			projectile.hits_left = 1 + weapon_level
 		_:
-			projectile.damage = 17.0 + difficulty_tier * 5.0 + 8.0 * polenta_level
-			projectile.radius = 12.0 + difficulty_tier * 2.0 + 3.0 * polenta_level
+			projectile.damage = 17.0 + difficulty_tier * 3.0 + 6.0 * polenta_level
+			projectile.radius = 13.0 + difficulty_tier + 2.0 * polenta_level
 			projectile.hits_left = 1
-	projectile.damage *= 1.0 + 0.20 * vitello_level
-	projectile.hits_left = int(projectile.hits_left) + kegiorg_level
-	if purgatorio_level > 0:
-		projectile.splash_radius = maxf(float(projectile.splash_radius), 42.0 + 10.0 * purgatorio_level)
-		projectile.splash_damage = maxf(float(projectile.splash_damage), float(projectile.damage) * (0.22 + 0.06 * purgatorio_level))
 	if difficulty_tier >= 4:
-		projectile.damage *= 1.18
+		projectile.damage *= 1.10
 	if recipe_evolution_choices.get("polenta", "") == "polenta_gigante":
 		projectile.damage *= 1.40
 		projectile.radius *= 1.28
@@ -1255,7 +1268,7 @@ func show_weapon_upgrade_choice() -> void:
 	heading.text = "LA DISPENSA ISPIRA!"
 	panel.add_child(heading)
 	var note := make_label(Vector2(38, 82), Vector2(548, 54), 16)
-	note.text = "Scegli come trasformare i prossimi lanci."
+	note.text = "Ogni ricetta e un'arma distinta: potenzia solo il proprio colpo."
 	panel.add_child(note)
 	for index in range(mini(3, choices.size())):
 		var upgrade: Dictionary = choices[index]
@@ -1263,7 +1276,7 @@ func show_weapon_upgrade_choice() -> void:
 		var card := make_panel(Rect2(34, 148 + index * 184, 556, 158), Color("#4b3153"), Color("#d49a55"))
 		panel.add_child(card)
 		var title := make_label(Vector2(16, 10), Vector2(524, 36), 21)
-		title.text = "%s  Lv.%d" % [String(upgrade.name), current_level + 1]
+		title.text = "%s  %s" % [String(upgrade.name), "NUOVA" if current_level == 0 else "Lv.%d > %d" % [current_level, current_level + 1]]
 		card.add_child(title)
 		var description := make_label(Vector2(24, 50), Vector2(508, 48), 15)
 		description.text = String(upgrade.description)
@@ -1693,12 +1706,19 @@ func draw_food_projectile(projectile: Dictionary) -> void:
 	var kind: String = String(projectile.get("kind", "burro"))
 	var texture: Texture2D = BUTTER_PROJECTILE_TEXTURE
 	var draw_size: float = clampf(44.0 + radius * 1.45, 56.0, 82.0)
-	if kind == "frittata":
-		texture = FRITTATA_PROJECTILE_TEXTURE
-		draw_size = clampf(48.0 + radius * 1.3, 66.0, 86.0)
-	elif kind == "bruschetta":
-		texture = BRUSCHETTA_PROJECTILE_TEXTURE
-		draw_size = clampf(50.0 + radius * 1.25, 70.0, 90.0)
+	match kind:
+		"vitello_tonnato":
+			texture = VITELLO_PROJECTILE_TEXTURE
+			draw_size = clampf(48.0 + radius * 1.35, 68.0, 94.0)
+		"uova_purgatorio":
+			texture = UOVA_PROJECTILE_TEXTURE
+			draw_size = clampf(48.0 + radius * 1.30, 66.0, 92.0)
+		"spaghetti_aglione":
+			texture = SPAGHETTI_PROJECTILE_TEXTURE
+			draw_size = clampf(46.0 + radius * 1.25, 62.0, 86.0)
+		"kegiorg":
+			texture = KEGIORG_PROJECTILE_TEXTURE
+			draw_size = clampf(50.0 + radius * 1.35, 70.0, 98.0)
 	var source: Rect2 = Rect2(Vector2(frame * 64, 0), Vector2(64, 64))
 	var destination: Rect2 = Rect2(projectile.pos - Vector2.ONE * draw_size * 0.5, Vector2.ONE * draw_size)
 	draw_circle(projectile.pos + Vector2(4, 6), radius + 3.0, Color(0.15, 0.08, 0.04, 0.24))
