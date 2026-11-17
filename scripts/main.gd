@@ -652,7 +652,7 @@ func spawn_enemy_data(data: EnemyData) -> Dictionary:
 	var endless_scale := maxf(0.0, float(endless_wave() - 1)) if endless_mode else 0.0
 	var zone_scale: float = float(zone_index) * 0.08
 	var wave_scale: float = float(maxi(0, wave_number - 1)) * 0.04
-	enemy.max_hp = data.max_health * (1.35 + zone_scale + wave_scale + difficulty_tier * 0.16 + endless_scale * 0.12)
+	enemy.max_hp = data.max_health * (1.7 + zone_scale + wave_scale + difficulty_tier * 0.16 + endless_scale * 0.12)
 	enemy.visual_scale = 1.0
 	if "giganti" in active_endless_modifiers:
 		enemy.max_hp *= 1.55
@@ -692,7 +692,7 @@ func begin_wave(number: int) -> void:
 	wave_is_special = number % 3 == 0
 	if wave_is_special:
 		# The specialist is the focus: only a small escort is spawned.
-		var escort_target: int = 3 + floori(float(zone_index) / 2.0) if not endless_mode else 4 + floori(float(number) / 3.0)
+		var escort_target: int = 5 + floori(float(zone_index) / 2.0) if not endless_mode else 6 + floori(float(number) / 3.0)
 		var existing_normal_enemies := 0
 		for active_enemy in enemies:
 			if String(active_enemy.data.id) != "ispettore":
@@ -702,9 +702,9 @@ func begin_wave(number: int) -> void:
 			var specialist: Dictionary = spawn_enemy_data(enemy_catalog[2])
 			add_floating_text("ARRIVA IL %s!" % String(specialist.role_title), player_pos + Vector2(0, -125), Color("#ffb84d"))
 	else:
-		wave_spawn_budget = 8 + zone_index * 2 + (number - 1) * 2 + difficulty_tier
+		wave_spawn_budget = 11 + zone_index * 3 + (number - 1) * 3 + difficulty_tier
 		if endless_mode:
-			wave_spawn_budget = 10 + number * 2 + difficulty_tier
+			wave_spawn_budget = 14 + number * 3 + difficulty_tier
 	spawn_clock = 0.55
 	add_floating_text("ONDA %d" % number, player_pos + Vector2(0, -90), Color("#fff06a"))
 
@@ -713,7 +713,7 @@ func update_wave_director(delta: float) -> void:
 		wave_time_remaining = maxf(0.0, wave_time_remaining - delta)
 		spawn_clock -= delta
 		if spawn_clock <= 0.0 and wave_spawned < wave_spawn_budget:
-			var enemy_limit: int = 70 if endless_mode else 55
+			var enemy_limit: int = 90 if endless_mode else 75
 			if enemies.size() < enemy_limit:
 				spawn_enemy()
 				wave_spawned += 1
